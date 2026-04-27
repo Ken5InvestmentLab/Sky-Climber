@@ -1,0 +1,1101 @@
+import React, { useEffect, useRef, useState } from "react";
+
+const WIDTH = 360;
+const HEIGHT = 640;
+const GRAVITY = 0.42;
+const JUMP = -9.5;
+const MOVE_SPEED = 4.2;
+const PLATFORM_COUNT = 12;
+const GROUND_Y = HEIGHT - 44;
+const STORAGE_KEY = "climb-high-score";
+const PLAYER_NAME_KEY = "climb-player-name";
+const MILESTONE_STEP = 500;
+const POWERUP_DURATION = 720;
+const POWERUP_TYPES = ["shield", "magnet", "slow", "clear", "bonus"];
+const UPGRADE_TYPES = ["rapid", "spread", "power", "orbit"];
+
+const AREA_ENEMIES = {
+  night: ["zigzag", "patrol"],
+  sky: ["zigzag", "swoop"],
+  space: ["seeker", "zigzag"],
+  dream: ["seeker", "swoop", "patrol"],
+};
+
+function clamp(v, min, max) {
+  return Math.max(min, Math.min(max, v));
+}
+
+function hexToRgb(hex) {
+  const h = hex.replace("#", "");
+  return { r: parseInt(h.slice(0, 2), 16), g: parseInt(h.slice(2, 4), 16), b: parseInt(h.slice(4, 6), 16) };
+}
+
+function mixColor(a, b, t) {
+  const ca = hexToRgb(a);
+  const cb = hexToRgb(b);
+  const p = clamp(t, 0, 1);
+  return `rgb(${Math.round(ca.r + (cb.r - ca.r) * p)},${Math.round(ca.g + (cb.g - ca.g) * p)},${Math.round(ca.b + (cb.b - ca.b) * p)})`;
+}
+
+function getSmoothSky(score) {
+  const stages = [
+    { at: 0, colors: ["#020617", "#1e1b4b", "#581c87"] },
+    { at: 1000, colors: ["#0f172a", "#2563eb", "#38bdf8"] },
+    { at: 2000, colors: ["#0369a1", "#38bdf8", "#bae6fd"] },
+    { at: 3000, colors: ["#020617", "#0f172a", "#22d3ee"] },
+    { at: 4000, colors: ["#1e1b4b", "#7c3aed", "#f472b6"] },
+    { at: 5200, colors: ["#020617", "#4c1d95", "#f0abfc"] },
+  ];
+  const eased = (x) => x * x * (3 - 2 * x);
+  let from = stages[0];
+  let to = stages[1];
+  for (let i = 0; i < stages.length - 1; i++) {
+    if (score >= stages[i].at && score <= stages[i + 1].at) {
+      from = stages[i];
+      to = stages[i + 1];
+      break;
+    }
+  }
+  if (score > stages[stages.length - 1].at) {
+    from = stages[stages.length - 2];
+    to = stages[stages.length - 1];
+  }
+  const t = eased(clamp((score - from.at) / (to.at - from.at), 0, 1));
+  return [0, 1, 2].map((i) => mixColor(from.colors[i], to.colors[i], t));
+}
+
+function getArea(score) {
+  if (score > 4000) return "dream";
+  if (score > 3000) return "space";
+  if (score > 1000) return "sky";
+  return "night";
+}
+
+function safeGetHighScore() {
+  try {
+    if (typeof window === "undefined") return 0;
+    return Number(window.localStorage.getItem(STORAGE_KEY) || 0);
+  } catch {
+    return 0;
+  }
+}
+
+function safeSetHighScore(v) {
+  try {
+    if (typeof window === "undefined") return;
+    window.localStorage.setItem(STORAGE_KEY, String(v));
+  } catch {}
+}
+
+function getSavedName() {
+  try {
+    if (typeof window === "undefined") return "YOU";
+    return window.localStorage.getItem(PLAYER_NAME_KEY) || "YOU";
+  } catch {
+    return "YOU";
+  }
+}
+
+function saveName(name) {
+  try {
+    if (typeof window === "undefined") return;
+    window.localStorage.setItem(PLAYER_NAME_KEY, name || "YOU");
+  } catch {}
+}
+
+function makeMockLeaderboard(myScore = 0, myName = "YOU") {
+  const names = ["Luna", "Kai", "Mio", "Sora", "Neko", "Rin", "Aoi", "Yuzu", "Leo", "Hana", "Taro", "Noa", "Kiki", "Zen", "Mugi", "Ivy", "Rio", "Coco", "Ray", "Nina"];
+  const rows = Array.from({ length: 99 }, (_, i) => ({
+    id: `bot-${i}`,
+    name: names[i % names.length] + String(Math.floor(i / names.length) + 1),
+    score: Math.max(80, Math.floor(5200 - i * 42 + Math.sin(i * 3.1) * 130)),
+  }));
+  rows.push({ id: "me", name: myName || "YOU", score: myScore, me: true });
+  return rows.sort((a, b) => b.score - a.score).slice(0, 100).map((r, i) => ({ ...r, rank: i + 1 }));
+}
+
+function makePlatforms(startY = HEIGHT - 120, heightScore = 0) {
+  let lastX = WIDTH / 2 - 45;
+  const spread = 70 + Math.min(120, heightScore * 0.3);
+  const themes = ["gold", "cyan", "violet"];
+  return [
+    { id: "ground", x: 0, y: GROUND_Y, w: WIDTH, ground: true, theme: "green" },
+    ...Array.from({ length: PLATFORM_COUNT }, (_, i) => {
+      const x = clamp(lastX + (Math.random() * spread - spread / 2), 20, WIDTH - 110);
+      lastX = x;
+      return { id: i, x, y: startY - i * 80, w: 92, theme: themes[i % themes.length] };
+    }),
+  ];
+}
+
+function makeConfetti(x, y, amount = 50) {
+  const colors = ["#facc15", "#38bdf8", "#c084fc", "#fb7185", "#4ade80", "#ffffff"];
+  return Array.from({ length: amount }, (_, i) => ({
+    type: "confetti",
+    x,
+    y,
+    vx: (Math.random() - 0.5) * 7,
+    vy: -2 - Math.random() * 7,
+    life: 1,
+    size: 3 + Math.random() * 5,
+    rot: Math.random() * Math.PI,
+    vr: (Math.random() - 0.5) * 0.25,
+    color: colors[i % colors.length],
+  }));
+}
+
+function findReachablePowerupSpot(platforms, playerY, fallbackX) {
+  const candidates = platforms.filter((pl) => !pl.ground && pl.y < playerY - 35 && pl.y > playerY - 260).sort((a, b) => b.y - a.y);
+  const platform = candidates[0];
+  if (!platform) return { x: clamp(fallbackX, 42, WIDTH - 42), y: playerY - 95 };
+  return { x: clamp(platform.x + platform.w / 2, 42, WIDTH - 42), y: platform.y - 34 };
+}
+
+export default function App() {
+  const canvasRef = useRef(null);
+  const keys = useRef({ left: false, right: false });
+  const player = useRef({ x: WIDTH / 2, y: HEIGHT - 120, vx: 0, vy: 0, r: 15 });
+  const platforms = useRef(makePlatforms());
+  const enemies = useRef([]);
+  const powerups = useRef([]);
+  const powers = useRef({ shield: 0, magnet: 0, slow: 0 });
+  const particles = useRef([]);
+  const bullets = useRef([]);
+  const weapon = useRef({ rapid: 1, spread: 0, power: 1, orbit: 0, cooldown: 0, orbitAngle: 0 });
+  const pickupTexts = useRef([]);
+  const cameraY = useRef(0);
+  const best = useRef(0);
+  const running = useRef(false);
+  const pausedRef = useRef(false);
+  const startedRef = useRef(false);
+  const isDead = useRef(false);
+  const time = useRef(0);
+  const nextMilestone = useRef(MILESTONE_STEP);
+  const nextBoss = useRef(1000);
+  const celebration = useRef({ active: false, timer: 0, height: 0 });
+
+  const highScoreRef = useRef(safeGetHighScore());
+  const [score, setScore] = useState(0);
+  const [highScore, setHighScore] = useState(() => highScoreRef.current);
+  const [dead, setDead] = useState(false);
+  const [started, setStarted] = useState(false);
+  const [paused, setPaused] = useState(false);
+  const [screen, setScreen] = useState("home");
+  const [playerName, setPlayerName] = useState(getSavedName);
+  const [leaderboard, setLeaderboard] = useState(() => makeMockLeaderboard(safeGetHighScore(), getSavedName()));
+
+  const reset = () => {
+    player.current = { x: WIDTH / 2, y: HEIGHT - 120, vx: 0, vy: 0, r: 15 };
+    platforms.current = makePlatforms();
+    enemies.current = [];
+    powerups.current = [];
+    powers.current = { shield: 0, magnet: 0, slow: 0 };
+    particles.current = [];
+    bullets.current = [];
+    pickupTexts.current = [];
+    weapon.current = { rapid: 1, spread: 0, power: 1, orbit: 0, cooldown: 0, orbitAngle: 0 };
+    cameraY.current = 0;
+    best.current = 0;
+    nextMilestone.current = MILESTONE_STEP;
+    nextBoss.current = 1000;
+    celebration.current = { active: false, timer: 0, height: 0 };
+    running.current = true;
+    pausedRef.current = false;
+    startedRef.current = true;
+    isDead.current = false;
+    setScore(0);
+    setDead(false);
+    setPaused(false);
+    setStarted(true);
+  };
+
+  const startGame = () => {
+    setScreen("game");
+    setTimeout(reset, 0);
+  };
+
+  const goHome = () => {
+    running.current = false;
+    pausedRef.current = false;
+    startedRef.current = false;
+    isDead.current = false;
+    setPaused(false);
+    setDead(false);
+    setStarted(false);
+    setScreen("home");
+    keys.current.left = false;
+    keys.current.right = false;
+  };
+
+  const openLeaderboard = () => {
+    setLeaderboard(makeMockLeaderboard(highScore, playerName));
+    setScreen("leaderboard");
+  };
+
+  const gameOver = () => {
+    running.current = false;
+    pausedRef.current = false;
+    isDead.current = true;
+    const finalScore = Math.floor(best.current);
+    const nextHighScore = Math.max(highScoreRef.current, finalScore);
+    highScoreRef.current = nextHighScore;
+    safeSetHighScore(nextHighScore);
+    setHighScore(nextHighScore);
+    setLeaderboard(makeMockLeaderboard(nextHighScore, playerName));
+    setPaused(false);
+    setDead(true);
+  };
+
+  const togglePause = () => {
+    if (!startedRef.current || isDead.current) return;
+    pausedRef.current = !pausedRef.current;
+    setPaused(pausedRef.current);
+  };
+
+  const celebrate = (height) => {
+    celebration.current = { active: true, timer: 70, height };
+    particles.current.push(...makeConfetti(WIDTH / 2, cameraY.current + 110, 24));
+  };
+
+  const applyUpgrade = (type) => {
+    if (type === "rapid") weapon.current.rapid = Math.min(12, weapon.current.rapid + 1);
+    if (type === "spread") weapon.current.spread = Math.min(12, weapon.current.spread + 1);
+    if (type === "power") weapon.current.power = Math.min(8, weapon.current.power + 1);
+    if (type === "orbit") weapon.current.orbit = Math.min(6, weapon.current.orbit + 1);
+    pickupTexts.current.push({ x: WIDTH / 2, y: cameraY.current + 95, life: 1, text: `UPGRADE ${type.toUpperCase()}`, color: "#facc15" });
+  };
+
+  useEffect(() => {
+    if (typeof document === "undefined") return;
+    document.body.style.margin = "0";
+    document.body.style.overflow = "hidden";
+    document.body.style.touchAction = "none";
+    const down = (e) => {
+      if (["ArrowLeft", "ArrowRight", "a", "A", "d", "D", " "].includes(e.key)) e.preventDefault();
+      if (e.key === "ArrowLeft" || e.key === "a" || e.key === "A") keys.current.left = true;
+      if (e.key === "ArrowRight" || e.key === "d" || e.key === "D") keys.current.right = true;
+      if (e.key === " ") {
+        if (!startedRef.current || isDead.current) reset();
+        else togglePause();
+      }
+    };
+    const up = (e) => {
+      if (e.key === "ArrowLeft" || e.key === "a" || e.key === "A") keys.current.left = false;
+      if (e.key === "ArrowRight" || e.key === "d" || e.key === "D") keys.current.right = false;
+    };
+    window.addEventListener("keydown", down, { passive: false });
+    window.addEventListener("keyup", up);
+    return () => {
+      window.removeEventListener("keydown", down);
+      window.removeEventListener("keyup", up);
+      document.body.style.overflow = "";
+      document.body.style.touchAction = "";
+    };
+  }, []);
+
+  useEffect(() => {
+    if (screen !== "game") return;
+    const canvas = canvasRef.current;
+    if (!canvas) return;
+    const ctx = canvas.getContext("2d");
+    let raf;
+
+    const rounded = (x, y, w, h, r, fill = true) => {
+      ctx.beginPath();
+      ctx.moveTo(x + r, y);
+      ctx.lineTo(x + w - r, y);
+      ctx.quadraticCurveTo(x + w, y, x + w, y + r);
+      ctx.lineTo(x + w, y + h - r);
+      ctx.quadraticCurveTo(x + w, y + h, x + w - r, y + h);
+      ctx.lineTo(x + r, y + h);
+      ctx.quadraticCurveTo(x, y + h, x, y + h - r);
+      ctx.lineTo(x, y + r);
+      ctx.quadraticCurveTo(x, y, x + r, y);
+      ctx.closePath();
+      if (fill) ctx.fill();
+      else ctx.stroke();
+    };
+
+    const spawnBoss = () => {
+      const stage = Math.floor(best.current / 1000);
+      const type = stage < 2 ? "core" : stage < 4 ? "hunter" : "void";
+      const baseHp = 48 + stage * 30;
+      enemies.current.push({ boss: true, type, x: WIDTH / 2, y: cameraY.current + 80, vx: 0, vy: 0, hp: baseHp, maxHp: baseHp, t: 0, dashTimer: 220, attackDelay: 180 });
+      const names = { core: "異形核", hunter: "追跡者", void: "虚無の主" };
+      pickupTexts.current.push({ x: WIDTH / 2, y: cameraY.current + 120, life: 1, text: names[type], color: "#fb7185" });
+    };
+
+    const update = () => {
+      const p = player.current;
+      const currentArea = getArea(best.current);
+      const difficulty = Math.min(1, best.current / 550);
+      const chaos = Math.min(1, best.current / 5200);
+
+      weapon.current.cooldown -= 1;
+      const fireRate = Math.max(5, 22 - weapon.current.rapid * 2);
+      if (weapon.current.cooldown <= 0) {
+        weapon.current.cooldown = fireRate;
+        const count = Math.min(14, 1 + weapon.current.spread);
+        for (let i = 0; i < count; i++) {
+          const offset = i - (count - 1) / 2;
+          bullets.current.push({ x: p.x + offset * 6, y: p.y - 14, vx: offset * 0.22, vy: -8.2, r: 2.8 + weapon.current.power * 0.15, damage: weapon.current.power });
+        }
+      }
+      if (weapon.current.orbit > 0) {
+        weapon.current.orbitAngle += 0.08;
+        for (let i = 0; i < weapon.current.orbit; i++) {
+          const a = weapon.current.orbitAngle + (Math.PI * 2 * i) / weapon.current.orbit;
+          bullets.current.push({ x: p.x + Math.cos(a) * 32, y: p.y + Math.sin(a) * 32, vx: 0, vy: -0.15, r: 4, damage: Math.max(1, weapon.current.power - 1), kind: "orbit", life: 18 });
+        }
+      }
+
+      p.vx = 0;
+      if (keys.current.left) p.vx -= MOVE_SPEED;
+      if (keys.current.right) p.vx += MOVE_SPEED;
+      p.x += p.vx;
+      p.vy += GRAVITY;
+      p.y += p.vy;
+      if (p.x < -p.r) p.x = WIDTH + p.r;
+      if (p.x > WIDTH + p.r) p.x = -p.r;
+
+      platforms.current.forEach((pl) => {
+        const prevY = p.y - p.vy;
+        if (p.vy > 0 && prevY + p.r <= pl.y && p.y + p.r >= pl.y && p.x > pl.x - p.r && p.x < pl.x + pl.w + p.r) {
+          p.vy = JUMP;
+          for (let i = 0; i < 9; i++) particles.current.push({ type: "dust", x: p.x, y: pl.y, life: 1, vx: (Math.random() - 0.5) * 2.8, vy: -Math.random() * 2.3, size: 1.5 + Math.random() * 2, color: "#fef08a" });
+        }
+      });
+
+      const bossAlive = enemies.current.some((e) => e.boss && !e.dead);
+      if (!bossAlive && best.current >= nextBoss.current) {
+        spawnBoss();
+        nextBoss.current += 1000;
+      }
+
+      const maxEnemies = bossAlive ? 5 : Math.floor(3 + chaos * 22);
+      const spawnRate = bossAlive ? 0.002 + chaos * 0.006 : 0.002 + chaos * 0.018;
+      const lanes = [60, WIDTH / 2 - 14, WIDTH - 88];
+      const activeLanes = enemies.current.filter((e) => !e.boss && e.y < cameraY.current + 120 && e.y > cameraY.current - 200).map((e) => e.lane).filter((l) => l != null);
+      if (enemies.current.filter((e) => !e.boss).length < maxEnemies && Math.random() < spawnRate) {
+        const availableIdx = lanes.map((_, i) => i).filter((i) => !activeLanes.includes(i));
+        let laneIndex = availableIdx.length ? availableIdx[Math.floor(Math.random() * availableIdx.length)] : Math.floor(Math.random() * lanes.length);
+        let x = lanes[laneIndex];
+        if (Math.abs(x - p.x) < 50) {
+          const alt = lanes.findIndex((lx) => Math.abs(lx - p.x) > 70);
+          if (alt >= 0) {
+            laneIndex = alt;
+            x = lanes[alt];
+          }
+        }
+        const pool = AREA_ENEMIES[currentArea] || AREA_ENEMIES.night;
+        const type = pool[Math.floor(Math.random() * pool.length)];
+        enemies.current.push({ x, y: cameraY.current - 120, rot: Math.random() * 10, type, t: 0, dir: Math.random() < 0.5 ? -1 : 1, lane: laneIndex, state: type === "seeker" ? "windup" : "active", wind: 40 + Math.floor(Math.random() * 30) });
+      }
+
+      const powerupSpawnRate = 0.00075 + difficulty * 0.00045;
+      const upgradeSpawnRate = 0.00035 + difficulty * 0.0003;
+      if (powerups.current.length < 2 && Math.random() < powerupSpawnRate) {
+        const s = findReachablePowerupSpot(platforms.current, p.y, p.x);
+        powerups.current.push({ x: s.x, y: s.y, type: POWERUP_TYPES[Math.floor(Math.random() * POWERUP_TYPES.length)], spin: Math.random() * Math.PI });
+      }
+      if (powerups.current.length < 2 && Math.random() < upgradeSpawnRate) {
+        const s = findReachablePowerupSpot(platforms.current, p.y, p.x);
+        powerups.current.push({ x: s.x, y: s.y, type: "upgrade", spin: Math.random() * Math.PI });
+      }
+
+      enemies.current.forEach((enemy) => {
+        const sy = enemy.y - cameraY.current;
+        if (enemy.boss) {
+          ctx.save();
+          ctx.translate(enemy.x, sy);
+          const phase2 = enemy.hp <= enemy.maxHp * 0.45;
+
+          // シンプルで視認性高いボス
+          ctx.shadowColor = phase2 ? "#ff4d6d" : "#ff0000";
+          ctx.shadowBlur = 25;
+          ctx.fillStyle = phase2 ? "#ff4d6d" : "#ff3b3b";
+          ctx.beginPath();
+          ctx.arc(0, 0, 26, 0, Math.PI * 2);
+          ctx.fill();
+
+          // 目
+          ctx.fillStyle = "#000";
+          ctx.beginPath();
+          ctx.arc(-8, -4, 3, 0, Math.PI * 2);
+          ctx.arc(8, -4, 3, 0, Math.PI * 2);
+          ctx.fill();
+
+          // HPバー
+          ctx.fillStyle = "rgba(0,0,0,0.6)";
+          rounded(-30, -44, 60, 6, 3);
+          ctx.fillStyle = "#00ffcc";
+          rounded(-30, -44, 60 * clamp(enemy.hp / enemy.maxHp, 0, 1), 6, 3);
+
+          ctx.restore();
+          return;
+        }
+
+        // 通常敵（見やすさ重視）
+        ctx.save();
+        ctx.translate(enemy.x + 14, sy + 12);
+
+        const colorMap = {
+          seeker: "#ff4d6d",
+          zigzag: "#ff7a00",
+          swoop: "#00d4ff",
+          patrol: "#a855f7",
+        };
+
+        const c = colorMap[enemy.type] || "#ff3b3b";
+
+        ctx.shadowColor = c;
+        ctx.shadowBlur = 12;
+        ctx.fillStyle = c;
+
+        ctx.beginPath();
+        ctx.arc(0, 0, 12, 0, Math.PI * 2);
+        ctx.fill();
+
+        // 目（白で視認性UP）
+        ctx.fillStyle = "#fff";
+        ctx.beginPath();
+        ctx.arc(-4, -2, 2, 0, Math.PI * 2);
+        ctx.arc(4, -2, 2, 0, Math.PI * 2);
+        ctx.fill();
+
+        ctx.restore();
+      });
+      });
+
+      enemies.current.forEach((enemy) => {
+        if (enemy.dead) return;
+        if (enemy.boss) {
+          enemy.t += 1;
+          const phase2 = enemy.hp <= enemy.maxHp * 0.45;
+          const stage = Math.floor(best.current / 1000);
+          const targetX = p.x;
+          const targetY = cameraY.current + (phase2 ? 94 : 82) + Math.sin(enemy.t * 0.035) * 18;
+          const dx = targetX - enemy.x;
+          const dy = targetY - enemy.y;
+          const moveFactor = enemy.type === "void" ? 0.02 : enemy.type === "hunter" ? 0.017 : 0.014;
+          enemy.vx = (enemy.vx || 0) * 0.92 + dx * moveFactor;
+          enemy.vy = (enemy.vy || 0) * 0.92 + dy * moveFactor;
+          const maxBossSpeed = phase2 ? 2.4 + stage * 0.2 : 1.8 + stage * 0.15;
+          const sp = Math.hypot(enemy.vx, enemy.vy);
+          if (sp > maxBossSpeed) {
+            enemy.vx = (enemy.vx / sp) * maxBossSpeed;
+            enemy.vy = (enemy.vy / sp) * maxBossSpeed;
+          }
+          enemy.attackDelay = Math.max(0, (enemy.attackDelay || 0) - 1);
+          enemy.dashTimer -= 1;
+          if (enemy.attackDelay <= 0 && enemy.dashTimer <= 0) {
+            const ax = p.x - enemy.x;
+            const ay = p.y - enemy.y;
+            const ad = Math.hypot(ax, ay) || 1;
+            const dash = enemy.type === "void" ? 4.2 : enemy.type === "hunter" ? 3.6 : 3.0;
+            enemy.vx += (ax / ad) * dash;
+            enemy.vy += (ay / ad) * dash;
+            enemy.dashTimer = Math.max(105, 180 - stage * 10);
+            pickupTexts.current.push({ x: enemy.x, y: enemy.y - 40, life: 0.7, text: "予兆", color: "#fb7185" });
+          }
+          enemy.x = clamp(enemy.x + enemy.vx, 36, WIDTH - 36);
+          enemy.y = clamp(enemy.y + enemy.vy, cameraY.current + 56, cameraY.current + HEIGHT * 0.38);
+          if (Math.abs(enemy.x - p.x) < 42 && Math.abs(enemy.y - p.y) < 42) {
+            if (powers.current.shield > 0) {
+              enemy.hp -= 5;
+              powers.current.shield = 0;
+              particles.current.push(...makeConfetti(p.x, p.y, 36));
+            } else gameOver();
+          }
+          return;
+        }
+        const baseSpeed = (powers.current.slow > 0 ? 0.65 : 1) * (1.45 + difficulty * 1.55);
+        enemy.t += 0.05;
+        let vx = 0;
+        let vy = baseSpeed;
+        if (enemy.type === "seeker") {
+          if (enemy.state === "windup") {
+            enemy.wind -= 1;
+            vy *= 0.5;
+            if (enemy.wind <= 0) enemy.state = "active";
+          } else {
+            const dx = p.x - (enemy.x + 14);
+            const dy = p.y - (enemy.y + 12);
+            const d = Math.hypot(dx, dy) || 1;
+            vx = (dx / d) * (0.8 + difficulty * 1.2);
+            vy = baseSpeed + (dy > 0 ? 0.6 : 0);
+          }
+        } else if (enemy.type === "zigzag") vx = Math.sin(enemy.t * 3) * (1.5 + difficulty * 2);
+        else if (enemy.type === "swoop") {
+          vx = Math.sin(enemy.t * 2) * 2.2;
+          vy = baseSpeed + Math.abs(Math.sin(enemy.t * 2)) * 2.2;
+        } else if (enemy.type === "patrol") {
+          vx = enemy.dir * (1.2 + difficulty * 1.2);
+          if (enemy.x < 10 || enemy.x > WIDTH - 30) enemy.dir *= -1;
+        }
+        enemy.x += vx;
+        enemy.y += vy;
+        enemy.rot += 0.075 + Math.abs(vx) * 0.02;
+        if (Math.abs(enemy.x + 14 - p.x) < 24 && Math.abs(enemy.y + 12 - p.y) < 24) {
+          if (powers.current.shield > 0) {
+            enemy.dead = true;
+            powers.current.shield = 0;
+            particles.current.push(...makeConfetti(p.x, p.y, 30));
+          } else gameOver();
+        }
+      });
+      enemies.current = enemies.current.filter((e) => !e.dead && (e.boss || e.y - cameraY.current < HEIGHT + 90));
+
+      powerups.current.forEach((item) => {
+        item.spin += 0.06;
+        if (powers.current.magnet > 0) {
+          const dx = p.x - item.x;
+          const dy = p.y - item.y;
+          const dist = Math.hypot(dx, dy);
+          if (dist < 95 && dist > 1) {
+            item.x += (dx / dist) * 3.2;
+            item.y += (dy / dist) * 3.2;
+          }
+        }
+        if (Math.abs(item.x - p.x) < 28 && Math.abs(item.y - p.y) < 32) {
+          item.taken = true;
+          const labelMap = { shield: "SHIELD!", magnet: "MAGNET!", slow: "SLOW!", clear: "CLEAR!", bonus: "+50", upgrade: "UPGRADE!" };
+          pickupTexts.current.push({ x: item.x, y: item.y - 20, life: 1, text: labelMap[item.type] || "POWER", color: "#fff" });
+          if (item.type === "clear") {
+            enemies.current = enemies.current.filter((e) => e.boss);
+            particles.current.push(...makeConfetti(p.x, p.y, 70));
+          } else if (item.type === "bonus") {
+            best.current += 50;
+          } else if (item.type === "upgrade") {
+            applyUpgrade(UPGRADE_TYPES[Math.floor(Math.random() * UPGRADE_TYPES.length)]);
+          } else powers.current[item.type] = (powers.current[item.type] || 0) + POWERUP_DURATION;
+        }
+      });
+      powerups.current = powerups.current.filter((item) => !item.taken && item.y - cameraY.current < HEIGHT + 120);
+
+      Object.keys(powers.current).forEach((key) => {
+        if (powers.current[key] > 0) powers.current[key] -= 1;
+      });
+      particles.current.forEach((pt) => {
+        pt.x += pt.vx;
+        pt.y += pt.vy;
+        pt.vy += pt.type === "confetti" ? 0.12 : 0.04;
+        pt.rot = (pt.rot || 0) + (pt.vr || 0);
+        pt.life -= pt.type === "confetti" ? 0.012 : 0.028;
+      });
+      particles.current = particles.current.filter((pt) => pt.life > 0);
+      bullets.current.forEach((b) => {
+        b.x += b.vx || 0;
+        b.y += b.vy || 0;
+        if (b.life != null) b.life -= 1;
+      });
+      bullets.current = bullets.current.filter((b) => !b.hit && b.y > cameraY.current - 80 && b.y < cameraY.current + HEIGHT + 80 && (b.life == null || b.life > 0));
+      pickupTexts.current.forEach((t) => {
+        t.y -= 0.6;
+        t.life -= 0.02;
+      });
+      pickupTexts.current = pickupTexts.current.filter((t) => t.life > 0);
+      if (celebration.current.active) {
+        celebration.current.timer -= 1;
+        if (celebration.current.timer <= 0) celebration.current.active = false;
+      }
+
+      const targetCam = Math.min(cameraY.current, p.y - HEIGHT * 0.65);
+      cameraY.current += (targetCam - cameraY.current) * 0.1;
+      best.current = Math.max(best.current, -cameraY.current / 8);
+      const currentScore = Math.floor(best.current);
+      if (currentScore >= nextMilestone.current) {
+        celebrate(nextMilestone.current);
+        nextMilestone.current += MILESTONE_STEP;
+      }
+      setScore(currentScore);
+      if (currentScore > highScoreRef.current) {
+        highScoreRef.current = currentScore;
+        safeSetHighScore(currentScore);
+        setHighScore(currentScore);
+      }
+      let top = Math.min(...platforms.current.map((pl) => pl.y));
+      let lastX = platforms.current.filter((pl) => !pl.ground).sort((a, b) => a.y - b.y)[0]?.x ?? WIDTH / 2;
+      platforms.current = platforms.current.map((pl) => {
+        if (pl.ground) return pl;
+        if (pl.y - cameraY.current > HEIGHT + 40) {
+          top -= 80;
+          const spread = 70 + Math.min(130, best.current * 0.28);
+          const x = clamp(lastX + (Math.random() * spread - spread / 2), 20, WIDTH - 110);
+          lastX = x;
+          const themes = ["gold", "cyan", "violet"];
+          return { ...pl, x, y: top, w: Math.max(72, 94 - difficulty * 16), theme: themes[Math.floor(Math.random() * themes.length)] };
+        }
+        return pl;
+      });
+      if (p.y - cameraY.current > HEIGHT + 80) gameOver();
+    };
+
+    const draw = () => {
+      ctx.clearRect(0, 0, WIDTH, HEIGHT);
+      const h = best.current;
+      const area = getArea(h);
+      const [topColor, midColor, bottomColor] = getSmoothSky(h);
+      const bg = ctx.createLinearGradient(0, 0, 0, HEIGHT);
+      bg.addColorStop(0, topColor);
+      bg.addColorStop(0.42, midColor);
+      bg.addColorStop(1, bottomColor);
+      ctx.fillStyle = bg;
+      ctx.fillRect(0, 0, WIDTH, HEIGHT);
+
+      if (h < 1200) {
+        ctx.save();
+        ctx.globalAlpha = 0.22;
+        ctx.fillStyle = "#0f172a";
+        for (let i = 0; i < 7; i++) {
+          const x = 25 + i * 48;
+          const bh = 110 + (i % 3) * 38;
+          rounded(x, HEIGHT - 36 - bh, 28, bh, 8);
+        }
+        ctx.restore();
+      }
+      const cloudAlpha = clamp((h - 650) / 700, 0, 1) * (1 - clamp((h - 2700) / 900, 0, 1));
+      if (cloudAlpha > 0) {
+        for (let i = 0; i < 6; i++) {
+          const cx = (i * 80 + time.current * 0.5) % (WIDTH + 120) - 60;
+          const cy = (i * 90 - cameraY.current * 0.2) % HEIGHT;
+          ctx.fillStyle = `rgba(255,255,255,${0.48 * cloudAlpha})`;
+          ctx.beginPath();
+          ctx.arc(cx, cy, 22, 0, Math.PI * 2);
+          ctx.arc(cx + 20, cy + 6, 18, 0, Math.PI * 2);
+          ctx.arc(cx - 20, cy + 6, 18, 0, Math.PI * 2);
+          ctx.fill();
+        }
+      }
+      const dreamAlpha = clamp((h - 3500) / 1200, 0, 1);
+      if (dreamAlpha > 0) {
+        const aura = ctx.createRadialGradient(WIDTH / 2, HEIGHT / 2, 10, WIDTH / 2, HEIGHT / 2, 260);
+        aura.addColorStop(0, `rgba(244,114,182,${0.25 * dreamAlpha})`);
+        aura.addColorStop(1, "rgba(0,0,0,0)");
+        ctx.fillStyle = aura;
+        ctx.fillRect(0, 0, WIDTH, HEIGHT);
+      }
+      const starCount = 80 + Math.floor(clamp((h - 2400) / 1200, 0, 1) * 60);
+      for (let i = 0; i < starCount; i++) {
+        const depth = 0.12 + (i % 5) * 0.07;
+        const x = (i * 47) % WIDTH;
+        const rawY = (i * 83 - cameraY.current * depth) % HEIGHT;
+        const y = rawY < 0 ? rawY + HEIGHT : rawY;
+        ctx.fillStyle = `rgba(255,255,255,${0.16 + depth * (1 - cloudAlpha * 0.55)})`;
+        ctx.beginPath();
+        ctx.arc(x, y, 0.7 + (i % 3) * 0.55, 0, Math.PI * 2);
+        ctx.fill();
+      }
+
+      platforms.current.forEach((pl) => {
+        const sy = pl.y - cameraY.current;
+        const colors = { green: ["#86efac", "#22c55e", "#14532d", "#4ade80"], gold: ["#fef3c7", "#facc15", "#92400e", "#fde047"], cyan: ["#cffafe", "#22d3ee", "#155e75", "#67e8f9"], violet: ["#f3e8ff", "#c084fc", "#6b21a8", "#d8b4fe"] }[pl.theme || "gold"];
+        ctx.save();
+        ctx.shadowColor = colors[3];
+        ctx.shadowBlur = 18;
+        const grad = ctx.createLinearGradient(pl.x, sy, pl.x, sy + 24);
+        grad.addColorStop(0, colors[0]);
+        grad.addColorStop(0.45, colors[1]);
+        grad.addColorStop(1, colors[2]);
+        ctx.fillStyle = grad;
+        rounded(pl.x, sy, pl.w, pl.ground ? 22 : 16, 8);
+        ctx.restore();
+      });
+
+      powerups.current.forEach((item) => {
+        const sy = item.y - cameraY.current + Math.sin(time.current * 0.12 + item.spin) * 5;
+        const meta = { shield: ["#67e8f9", "盾"], magnet: ["#f472b6", "磁"], slow: ["#a78bfa", "遅"], clear: ["#fb7185", "爆"], bonus: ["#facc15", "+"], upgrade: ["#facc15", "強"] }[item.type] || ["#facc15", "?"];
+        ctx.save();
+        ctx.translate(item.x, sy);
+        ctx.rotate(item.spin);
+        ctx.shadowBlur = 18;
+        ctx.shadowColor = meta[0];
+        ctx.fillStyle = meta[0];
+        ctx.beginPath();
+        for (let i = 0; i < 8; i++) {
+          const r = i % 2 === 0 ? 18 : 10;
+          const a = -Math.PI / 2 + (Math.PI * 2 * i) / 8;
+          const x = Math.cos(a) * r;
+          const y = Math.sin(a) * r;
+          if (i === 0) ctx.moveTo(x, y);
+          else ctx.lineTo(x, y);
+        }
+        ctx.closePath();
+        ctx.fill();
+        ctx.fillStyle = "rgba(15,23,42,0.78)";
+        ctx.beginPath();
+        ctx.arc(0, 0, 9, 0, Math.PI * 2);
+        ctx.fill();
+        ctx.fillStyle = "white";
+        ctx.font = "bold 11px system-ui";
+        ctx.textAlign = "center";
+        ctx.textBaseline = "middle";
+        ctx.fillText(meta[1], 0, 0);
+        ctx.restore();
+      });
+
+      bullets.current.forEach((b) => {
+        const sy = b.y - cameraY.current;
+        ctx.fillStyle = b.kind === "orbit" ? "#4ade80" : "#fef08a";
+        ctx.shadowColor = ctx.fillStyle;
+        ctx.shadowBlur = 10;
+        ctx.beginPath();
+        ctx.arc(b.x, sy, b.r || 3, 0, Math.PI * 2);
+        ctx.fill();
+        ctx.shadowBlur = 0;
+      });
+
+      enemies.current.forEach((enemy) => {
+        const sy = enemy.y - cameraY.current;
+        if (enemy.boss) {
+          ctx.save();
+          ctx.translate(enemy.x, sy);
+          const phase2 = enemy.hp <= enemy.maxHp * 0.45;
+          const aura = ctx.createRadialGradient(0, 0, 10, 0, 0, phase2 ? 76 : 62);
+          aura.addColorStop(0, phase2 ? "rgba(244,114,182,0.48)" : "rgba(239,68,68,0.4)");
+          aura.addColorStop(1, "rgba(0,0,0,0)");
+          ctx.fillStyle = aura;
+          ctx.beginPath();
+          ctx.arc(0, 0, phase2 ? 76 : 62, 0, Math.PI * 2);
+          ctx.fill();
+          ctx.fillStyle = "#0f172a";
+          ctx.shadowColor = phase2 ? "#f472b6" : "#ef4444";
+          ctx.shadowBlur = 26;
+          ctx.beginPath();
+          for (let i = 0; i < 10; i++) {
+            const a = (Math.PI * 2 * i) / 10;
+            const r = (phase2 ? 32 : 28) + Math.sin(time.current * 0.15 + i) * 7;
+            const x = Math.cos(a) * r;
+            const y = Math.sin(a) * r;
+            if (i === 0) ctx.moveTo(x, y);
+            else ctx.lineTo(x, y);
+          }
+          ctx.closePath();
+          ctx.fill();
+          const core = ctx.createRadialGradient(0, 0, 2, 0, 0, 20);
+          core.addColorStop(0, phase2 ? "#f9a8d4" : "#f87171");
+          core.addColorStop(1, "#7f1d1d");
+          ctx.fillStyle = core;
+          ctx.beginPath();
+          ctx.arc(0, 0, 15, 0, Math.PI * 2);
+          ctx.fill();
+          ctx.fillStyle = "rgba(15,23,42,0.7)";
+          rounded(-32, -50, 64, 7, 3);
+          ctx.fillStyle = phase2 ? "#f472b6" : "#ef4444";
+          rounded(-32, -50, 64 * clamp(enemy.hp / enemy.maxHp, 0, 1), 7, 3);
+          ctx.restore();
+          return;
+        }
+        ctx.save();
+        ctx.translate(enemy.x + 14, sy + 12);
+        ctx.rotate(Math.sin(enemy.rot) * 0.18);
+        ctx.fillStyle = enemy.type === "seeker" ? "#7f1d1d" : "#581c87";
+        ctx.shadowColor = enemy.type === "seeker" ? "#f87171" : "#ef4444";
+        ctx.shadowBlur = 14;
+        const wing = Math.sin(time.current * 0.3 + enemy.rot) * 5;
+        ctx.beginPath();
+        ctx.moveTo(-9, -2);
+        ctx.quadraticCurveTo(-28, -17 - wing, -31, 6);
+        ctx.quadraticCurveTo(-20, 1, -10, 9);
+        ctx.fill();
+        ctx.beginPath();
+        ctx.moveTo(9, -2);
+        ctx.quadraticCurveTo(28, -17 + wing, 31, 6);
+        ctx.quadraticCurveTo(20, 1, 10, 9);
+        ctx.fill();
+        ctx.restore();
+      });
+
+      particles.current.forEach((pt) => {
+        const sy = pt.y - cameraY.current;
+        ctx.globalAlpha = Math.max(0, pt.life);
+        ctx.fillStyle = pt.color || "#fff";
+        ctx.beginPath();
+        ctx.arc(pt.x, sy, pt.size || 2, 0, Math.PI * 2);
+        ctx.fill();
+        ctx.globalAlpha = 1;
+      });
+
+      const py = player.current.y - cameraY.current;
+      ctx.save();
+      ctx.translate(player.current.x, py + Math.sin(time.current * 0.12) * 2);
+      const facing = keys.current.left ? -1 : 1;
+      ctx.scale(facing, 1);
+      ctx.fillStyle = "#7c3aed";
+      ctx.beginPath();
+      ctx.moveTo(-6, 4);
+      ctx.quadraticCurveTo(-30, 16 + Math.sin(time.current * 0.2) * 3, -18, 34);
+      ctx.quadraticCurveTo(0, 25, 10, 8);
+      ctx.closePath();
+      ctx.fill();
+      ctx.fillStyle = "#bae6fd";
+      ctx.beginPath();
+      ctx.moveTo(-13, -12);
+      ctx.lineTo(-8, -27);
+      ctx.lineTo(-2, -12);
+      ctx.fill();
+      ctx.beginPath();
+      ctx.moveTo(8, -12);
+      ctx.lineTo(14, -27);
+      ctx.lineTo(18, -10);
+      ctx.fill();
+      const body = ctx.createRadialGradient(0, -3, 2, 0, 0, 24);
+      body.addColorStop(0, "#fff");
+      body.addColorStop(0.55, "#bae6fd");
+      body.addColorStop(1, "#38bdf8");
+      ctx.fillStyle = body;
+      ctx.beginPath();
+      ctx.ellipse(0, 0, 16, 19, 0, 0, Math.PI * 2);
+      ctx.fill();
+      ctx.fillStyle = "#facc15";
+      rounded(-13, 7, 27, 5, 3);
+      ctx.fillStyle = "#fef08a";
+      ctx.beginPath();
+      ctx.ellipse(-6, -4, 3.5, 2.5, 0, 0, Math.PI * 2);
+      ctx.fill();
+      ctx.beginPath();
+      ctx.ellipse(7, -4, 3.5, 2.5, 0, 0, Math.PI * 2);
+      ctx.fill();
+      [[powers.current.shield, "#67e8f9"], [powers.current.magnet, "#f472b6"], [powers.current.slow, "#a78bfa"]].filter(([v]) => v > 0).forEach(([, color], i) => {
+        ctx.strokeStyle = color;
+        ctx.lineWidth = 2;
+        ctx.beginPath();
+        ctx.arc(0, 0, 24 + i * 5, 0, Math.PI * 2);
+        ctx.stroke();
+      });
+      ctx.restore();
+
+      if (celebration.current.active) {
+        const c = celebration.current;
+        ctx.fillStyle = "rgba(15,23,42,0.68)";
+        rounded(74, 62, WIDTH - 148, 42, 14);
+        ctx.fillStyle = "#facc15";
+        ctx.font = "bold 13px system-ui";
+        ctx.textAlign = "center";
+        ctx.fillText(`BONUS ${c.height}m!`, WIDTH / 2, 80);
+        ctx.fillStyle = "#fff";
+        ctx.font = "bold 10px system-ui";
+        ctx.fillText("到達ボーナス", WIDTH / 2, 95);
+        ctx.textAlign = "left";
+      }
+
+      pickupTexts.current.forEach((t) => {
+        const sy = t.y - cameraY.current;
+        ctx.globalAlpha = Math.max(0, t.life);
+        ctx.fillStyle = t.color || "#fff";
+        ctx.font = "bold 16px system-ui";
+        ctx.textAlign = "center";
+        ctx.fillText(t.text, t.x, sy);
+        ctx.globalAlpha = 1;
+        ctx.textAlign = "left";
+      });
+
+      ctx.fillStyle = "rgba(15,23,42,0.54)";
+      rounded(12, 12, 136, 42, 13);
+      ctx.fillStyle = "white";
+      ctx.font = "bold 22px system-ui";
+      ctx.fillText(`${Math.floor(best.current)}m`, 24, 39);
+      ctx.fillStyle = "#fcd34d";
+      ctx.font = "bold 10px system-ui";
+      ctx.fillText(`R${weapon.current.rapid} S${weapon.current.spread} P${weapon.current.power} O${weapon.current.orbit}`, 25, 51);
+
+      const activeHud = [
+        { label: "SHIELD", desc: "1回無敵", color: "#67e8f9", timer: powers.current.shield },
+        { label: "MAGNET", desc: "吸い寄せ", color: "#f472b6", timer: powers.current.magnet },
+        { label: "SLOW", desc: "敵減速", color: "#a78bfa", timer: powers.current.slow },
+      ].filter((p) => p.timer > 0);
+      activeHud.forEach((p, i) => {
+        const x = 232;
+        const y = 12 + i * 46;
+        ctx.fillStyle = "rgba(15,23,42,0.54)";
+        rounded(x, y, 112, 40, 13);
+        ctx.fillStyle = p.color;
+        ctx.font = "bold 12px system-ui";
+        ctx.fillText(p.label, x + 13, y + 19);
+        ctx.fillStyle = "white";
+        ctx.font = "bold 10px system-ui";
+        ctx.fillText(`${Math.ceil(p.timer / 60)}s`, x + 13, y + 34);
+        ctx.fillStyle = "#cbd5f5";
+        ctx.fillText(p.desc, x + 55, y + 34);
+      });
+
+      if (pausedRef.current) {
+        ctx.fillStyle = "rgba(0,0,0,0.48)";
+        ctx.fillRect(0, 0, WIDTH, HEIGHT);
+        ctx.fillStyle = "#fff";
+        ctx.font = "bold 34px system-ui";
+        ctx.textAlign = "center";
+        ctx.fillText("PAUSE", WIDTH / 2, HEIGHT / 2 - 8);
+        ctx.font = "14px system-ui";
+        ctx.fillText("スペースでもう一度再開", WIDTH / 2, HEIGHT / 2 + 24);
+        ctx.textAlign = "left";
+      }
+    };
+
+    const tick = () => {
+      time.current += 1;
+      if (running.current && !isDead.current && !pausedRef.current) update();
+      else {
+        particles.current.forEach((pt) => {
+          pt.x += pt.vx;
+          pt.y += pt.vy;
+          pt.life -= 0.02;
+        });
+        particles.current = particles.current.filter((pt) => pt.life > 0);
+      }
+      draw();
+      raf = requestAnimationFrame(tick);
+    };
+
+    tick();
+    return () => cancelAnimationFrame(raf);
+  }, [screen, playerName]);
+
+  const touch = (side, isDown) => {
+    keys.current[side] = isDown;
+  };
+
+  const stopTouch = () => {
+    keys.current.left = false;
+    keys.current.right = false;
+  };
+
+  return (
+    <div style={styles.page}>
+      <div style={styles.phoneCard}>
+        {screen === "home" && (
+          <div style={styles.menuScreen}>
+            <div style={styles.logoOrb}>✦</div>
+            <div style={styles.bigTitle}>SKY CLIMBER</div>
+            <div style={styles.overlayText}>魔法猫を操作して、空の城を登れ。</div>
+            <div style={styles.nameBox}>
+              <label style={styles.nameLabel}>PLAYER NAME</label>
+              <input
+                style={styles.nameInput}
+                value={playerName}
+                maxLength={12}
+                onChange={(e) => {
+                  const next = e.target.value || "YOU";
+                  setPlayerName(next);
+                  saveName(next);
+                  setLeaderboard(makeMockLeaderboard(highScore, next));
+                }}
+              />
+            </div>
+            <div style={styles.homeScoreCard}>
+              <div style={styles.homeScoreLabel}>YOUR BEST</div>
+              <div style={styles.homeScore}>{highScore}m</div>
+            </div>
+            <button style={styles.mainButtonWide} onClick={startGame}>ゲーム開始</button>
+            <button style={styles.secondaryButton} onClick={openLeaderboard}>月間ランキング TOP100</button>
+          </div>
+        )}
+
+        {screen === "leaderboard" && (
+          <div style={styles.menuScreen}>
+            <div style={styles.headerRow}>
+              <button style={styles.smallButton} onClick={() => setScreen("home")}>← トップ</button>
+              <div style={styles.rankTitle}>MONTHLY TOP 100</div>
+            </div>
+            <div style={styles.leaderboardList}>
+              {leaderboard.map((row) => (
+                <div key={row.id} style={{ ...styles.rankRow, ...(row.me ? styles.myRankRow : {}) }}>
+                  <div style={styles.rankNo}>#{row.rank}</div>
+                  <div style={styles.rankName}>{row.name}</div>
+                  <div style={styles.rankScore}>{row.score}m</div>
+                </div>
+              ))}
+            </div>
+            <div style={styles.onlineNote}>今はローカルの仮ランキング。Supabase接続で本物の月間ランキングに差し替え可能。</div>
+          </div>
+        )}
+
+        {screen === "game" && (
+          <>
+            <div style={styles.header}>
+              <div>
+                <div style={styles.title}>SKY CLIMBER</div>
+                <div style={styles.subtitle}>武器進化 / ボス追跡 / 月間ランキング対応予定</div>
+              </div>
+              <div style={styles.scoreBox}>
+                <div style={styles.score}>{score}m</div>
+                <div style={styles.best}>BEST {highScore}m</div>
+              </div>
+            </div>
+            <div style={styles.topActions}>
+              <button style={styles.miniButton} onClick={goHome}>トップへ</button>
+              <button style={styles.miniButton} onClick={togglePause}>{paused ? "再開" : "一時停止"}</button>
+              <button style={styles.miniButton} onClick={openLeaderboard}>ランキング</button>
+            </div>
+            <div style={styles.stage}>
+              <canvas ref={canvasRef} width={WIDTH} height={HEIGHT} style={styles.canvas} onContextMenu={(e) => e.preventDefault()} />
+              {!started && (
+                <div style={styles.overlay}>
+                  <div style={styles.bigTitle}>SKY CLIMBER</div>
+                  <div style={styles.overlayText}>魔法猫を操作して、空の城を登れ。</div>
+                  <button style={styles.mainButton} onClick={reset}>スタート</button>
+                </div>
+              )}
+              {dead && (
+                <div style={styles.overlay}>
+                  <div style={styles.bigTitle}>ゲームオーバー</div>
+                  <div style={styles.overlayText}>記録：{score}m / BEST：{highScore}m</div>
+                  <button style={styles.mainButton} onClick={reset}>リトライ</button>
+                  <button style={styles.secondaryButtonSmall} onClick={goHome}>トップへ戻る</button>
+                </div>
+              )}
+            </div>
+            <div style={styles.controls} onPointerLeave={stopTouch} onPointerCancel={stopTouch}>
+              <button style={styles.controlButton} onPointerDown={(e) => { e.preventDefault(); touch("left", true); }} onPointerUp={(e) => { e.preventDefault(); touch("left", false); }} onPointerCancel={() => touch("left", false)} onPointerLeave={() => touch("left", false)}>←</button>
+              <button style={styles.controlButton} onPointerDown={(e) => { e.preventDefault(); touch("right", true); }} onPointerUp={(e) => { e.preventDefault(); touch("right", false); }} onPointerCancel={() => touch("right", false)} onPointerLeave={() => touch("right", false)}>→</button>
+            </div>
+            <div style={styles.help}>PC：←/→ または A/D、スペースで一時停止</div>
+          </>
+        )}
+      </div>
+    </div>
+  );
+}
+
+const styles = {
+  page: { minHeight: "100dvh", width: "100vw", overflow: "hidden", touchAction: "none", userSelect: "none", WebkitUserSelect: "none", WebkitTapHighlightColor: "transparent", background: "radial-gradient(circle at 70% 10%, #312e81 0%, transparent 30%), linear-gradient(135deg, #020617 0%, #0f172a 45%, #1e1b4b 100%)", display: "flex", alignItems: "center", justifyContent: "center", padding: 10, boxSizing: "border-box", color: "white", fontFamily: "system-ui, -apple-system, BlinkMacSystemFont, sans-serif" },
+  phoneCard: { width: "min(100%, 390px)", maxHeight: "100dvh", background: "linear-gradient(180deg, rgba(15,23,42,0.82), rgba(30,27,75,0.72))", border: "1px solid rgba(250,204,21,0.28)", borderRadius: 24, boxShadow: "0 0 50px rgba(0,0,0,0.7), inset 0 0 30px rgba(125,211,252,0.05)", backdropFilter: "blur(14px)", padding: 12, boxSizing: "border-box" },
+  header: { display: "flex", alignItems: "center", justifyContent: "space-between", gap: 10, marginBottom: 10 },
+  title: { fontSize: 21, fontWeight: 950, letterSpacing: "-0.04em", textShadow: "0 0 14px rgba(192,132,252,0.6)" },
+  subtitle: { fontSize: 11, color: "#c4b5fd" },
+  scoreBox: { textAlign: "right", lineHeight: 1.1 },
+  score: { fontSize: 22, fontWeight: 950, textShadow: "0 0 12px rgba(125,211,252,0.55)" },
+  best: { fontSize: 11, color: "#fcd34d", fontWeight: 900 },
+  stage: { position: "relative", borderRadius: 18, overflow: "hidden", border: "1px solid rgba(250,204,21,0.26)", background: "black", boxShadow: "inset 0 0 32px rgba(0,0,0,0.45)" },
+  canvas: { display: "block", width: "100%", maxHeight: "72dvh", objectFit: "contain", touchAction: "none" },
+  overlay: { position: "absolute", inset: 0, background: "rgba(0,0,0,0.5)", display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center", gap: 12, textAlign: "center", padding: 24, boxSizing: "border-box" },
+  bigTitle: { fontSize: 34, fontWeight: 950, letterSpacing: "-0.05em", textShadow: "0 0 18px rgba(251,146,60,0.7)" },
+  overlayText: { fontSize: 14, color: "#e2e8f0" },
+  mainButton: { border: "0", borderRadius: 16, padding: "12px 30px", color: "#0f172a", background: "linear-gradient(180deg, #fef08a, #facc15)", fontWeight: 950, fontSize: 16, boxShadow: "0 8px 24px rgba(250,204,21,0.35)", cursor: "pointer" },
+  controls: { display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10, marginTop: 10 },
+  controlButton: { height: 64, border: "1px solid rgba(216,180,254,0.45)", borderRadius: 18, color: "white", background: "linear-gradient(180deg, rgba(88,28,135,0.96), rgba(30,27,75,0.96))", fontSize: 28, fontWeight: 950, touchAction: "none", cursor: "pointer", boxShadow: "0 0 18px rgba(168,85,247,0.22)" },
+  help: { marginTop: 8, textAlign: "center", color: "#94a3b8", fontSize: 11 },
+  menuScreen: { minHeight: "min(720px, calc(100dvh - 44px))", display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center", gap: 14, textAlign: "center" },
+  logoOrb: { width: 86, height: 86, borderRadius: 999, display: "grid", placeItems: "center", fontSize: 44, color: "#facc15", background: "radial-gradient(circle, rgba(250,204,21,0.55), rgba(168,85,247,0.22) 55%, rgba(15,23,42,0.1))", boxShadow: "0 0 36px rgba(250,204,21,0.35)" },
+  nameBox: { width: "100%", maxWidth: 260, textAlign: "left", marginTop: 8 },
+  nameLabel: { display: "block", fontSize: 10, fontWeight: 900, color: "#c4b5fd", marginBottom: 6, letterSpacing: "0.08em" },
+  nameInput: { width: "100%", boxSizing: "border-box", border: "1px solid rgba(216,180,254,0.45)", borderRadius: 14, background: "rgba(15,23,42,0.7)", color: "white", padding: "12px 14px", fontSize: 16, fontWeight: 800, outline: "none" },
+  homeScoreCard: { width: "100%", maxWidth: 260, borderRadius: 18, padding: 16, background: "rgba(15,23,42,0.48)", border: "1px solid rgba(250,204,21,0.26)", boxSizing: "border-box" },
+  homeScoreLabel: { fontSize: 11, color: "#fcd34d", fontWeight: 900 },
+  homeScore: { fontSize: 34, fontWeight: 950, textShadow: "0 0 14px rgba(250,204,21,0.35)" },
+  mainButtonWide: { width: "100%", maxWidth: 260, border: "0", borderRadius: 16, padding: "14px 30px", color: "#0f172a", background: "linear-gradient(180deg, #fef08a, #facc15)", fontWeight: 950, fontSize: 17, boxShadow: "0 8px 24px rgba(250,204,21,0.35)", cursor: "pointer" },
+  secondaryButton: { width: "100%", maxWidth: 260, border: "1px solid rgba(216,180,254,0.45)", borderRadius: 16, padding: "13px 20px", color: "white", background: "linear-gradient(180deg, rgba(88,28,135,0.9), rgba(30,27,75,0.9))", fontWeight: 900, fontSize: 15, cursor: "pointer" },
+  secondaryButtonSmall: { border: "1px solid rgba(216,180,254,0.45)", borderRadius: 14, padding: "10px 20px", color: "white", background: "rgba(30,27,75,0.82)", fontWeight: 900, fontSize: 14, cursor: "pointer" },
+  headerRow: { width: "100%", display: "flex", alignItems: "center", justifyContent: "space-between", gap: 10 },
+  smallButton: { border: "1px solid rgba(216,180,254,0.35)", borderRadius: 12, padding: "9px 11px", color: "white", background: "rgba(15,23,42,0.65)", fontWeight: 800, cursor: "pointer" },
+  rankTitle: { fontSize: 15, fontWeight: 950, color: "#fcd34d" },
+  leaderboardList: { width: "100%", maxHeight: "calc(100dvh - 160px)", overflowY: "auto", paddingRight: 4, display: "flex", flexDirection: "column", gap: 6 },
+  rankRow: { display: "grid", gridTemplateColumns: "54px 1fr 82px", alignItems: "center", gap: 8, padding: "10px 10px", borderRadius: 12, background: "rgba(15,23,42,0.54)", border: "1px solid rgba(148,163,184,0.18)", fontSize: 13 },
+  myRankRow: { border: "1px solid rgba(250,204,21,0.75)", background: "rgba(250,204,21,0.13)" },
+  rankNo: { color: "#fcd34d", fontWeight: 950, textAlign: "left" },
+  rankName: { color: "white", fontWeight: 800, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", textAlign: "left" },
+  rankScore: { color: "#bae6fd", fontWeight: 950, textAlign: "right" },
+  onlineNote: { fontSize: 10, color: "#94a3b8", lineHeight: 1.4 },
+  topActions: { display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: 6, marginBottom: 8 },
+  miniButton: { border: "1px solid rgba(216,180,254,0.35)", borderRadius: 12, padding: "8px 6px", color: "white", background: "rgba(15,23,42,0.65)", fontWeight: 800, fontSize: 12, cursor: "pointer" },
+};
