@@ -1,46 +1,51 @@
-<!doctype html>
-<html lang="ja">
-<head>
-  <meta charset="UTF-8" />
-  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>Sky Climer</title>
-</head>
-<body>
-  <div id="root"></div>
-  <script crossorigin src="https://unpkg.com/react@18/umd/react.development.js"></script>
-  <script crossorigin src="https://unpkg.com/react-dom@18/umd/react-dom.development.js"></script>
-  <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
-  <script type="text/babel">
-const { useEffect, useRef, useState } = React;
+import React, { useEffect, useRef, useState } from "react";
 
 const WIDTH = 360;
 const HEIGHT = 640;
 const GRAVITY = 0.42;
-const JUMP = -9.5;
+const JUMP = -9.4;
 const MOVE_SPEED = 4.2;
-const PLATFORM_COUNT = 12;
-const GROUND_Y = HEIGHT - 44;
-const STORAGE_KEY = "climb-high-score";
-const PLAYER_NAME_KEY = "climb-player-name";
-const MILESTONE_STEP = 500;
 const POWERUP_DURATION = 720;
-const POWERUP_TYPES = ["shield", "magnet", "slow", "clear", "bonus"];
-const UPGRADE_TYPES = ["rapid", "spread", "power", "orbit"];
+const STORAGE_KEY = "sky-climber-high-score";
+const NAME_KEY = "sky-climber-player-name";
 
+const ENEMY_TYPES = ["zigzag", "swoop", "seeker", "patrol"];
 const AREA_ENEMIES = {
   night: ["zigzag", "patrol"],
   sky: ["zigzag", "swoop"],
-  space: ["seeker", "zigzag"],
-  dream: ["seeker", "swoop", "patrol"],
+  space: ["seeker", "zigzag", "swoop"],
+  dream: ["seeker", "swoop", "patrol", "zigzag"],
 };
+const POWER_TYPES = ["shield", "magnet", "slow", "clear", "bonus", "upgrade"];
+const UPGRADE_TYPES = ["rapid", "spread", "power", "orbit"];
+const BOSS_TYPES = ["core", "hunter", "void", "overlord"];
 
-function clamp(v, min, max) {
-  return Math.max(min, Math.min(max, v));
+function clamp(value, min, max) {
+  return Math.max(min, Math.min(max, value));
+}
+
+function safeGet(key, fallback) {
+  try {
+    if (typeof window === "undefined") return fallback;
+    return window.localStorage.getItem(key) ?? fallback;
+  } catch {
+    return fallback;
+  }
+}
+
+function safeSet(key, value) {
+  try {
+    if (typeof window !== "undefined") window.localStorage.setItem(key, String(value));
+  } catch {}
 }
 
 function hexToRgb(hex) {
-  const h = hex.replace("#", "");
-  return { r: parseInt(h.slice(0, 2), 16), g: parseInt(h.slice(2, 4), 16), b: parseInt(h.slice(4, 6), 16) };
+  const clean = hex.replace("#", "");
+  return {
+    r: parseInt(clean.slice(0, 2), 16),
+    g: parseInt(clean.slice(2, 4), 16),
+    b: parseInt(clean.slice(4, 6), 16),
+  };
 }
 
 function mixColor(a, b, t) {
@@ -50,19 +55,17 @@ function mixColor(a, b, t) {
   return `rgb(${Math.round(ca.r + (cb.r - ca.r) * p)},${Math.round(ca.g + (cb.g - ca.g) * p)},${Math.round(ca.b + (cb.b - ca.b) * p)})`;
 }
 
-function getSmoothSky(score) {
+function getBackgroundColors(score) {
   const stages = [
     { at: 0, colors: ["#020617", "#1e1b4b", "#581c87"] },
     { at: 1000, colors: ["#0f172a", "#2563eb", "#38bdf8"] },
     { at: 2000, colors: ["#0369a1", "#38bdf8", "#bae6fd"] },
     { at: 3000, colors: ["#020617", "#0f172a", "#22d3ee"] },
-    { at: 4000, colors: ["#1e1b4b", "#7c3aed", "#f472b6"] },
-    { at: 5200, colors: ["#020617", "#4c1d95", "#f0abfc"] },
+    { at: 4200, colors: ["#1e1b4b", "#7c3aed", "#f472b6"] },
   ];
-  const eased = (x) => x * x * (3 - 2 * x);
   let from = stages[0];
   let to = stages[1];
-  for (let i = 0; i < stages.length - 1; i++) {
+  for (let i = 0; i < stages.length - 1; i += 1) {
     if (score >= stages[i].at && score <= stages[i + 1].at) {
       from = stages[i];
       to = stages[i + 1];
@@ -73,8 +76,9 @@ function getSmoothSky(score) {
     from = stages[stages.length - 2];
     to = stages[stages.length - 1];
   }
-  const t = eased(clamp((score - from.at) / (to.at - from.at), 0, 1));
-  return [0, 1, 2].map((i) => mixColor(from.colors[i], to.colors[i], t));
+  const raw = clamp((score - from.at) / (to.at - from.at), 0, 1);
+  const eased = raw * raw * (3 - 2 * raw);
+  return [0, 1, 2].map((index) => mixColor(from.colors[index], to.colors[index], eased));
 }
 
 function getArea(score) {
@@ -84,142 +88,157 @@ function getArea(score) {
   return "night";
 }
 
-function safeGetHighScore() {
-  try {
-    if (typeof window === "undefined") return 0;
-    return Number(window.localStorage.getItem(STORAGE_KEY) || 0);
-  } catch {
-    return 0;
+function makePlatforms(score = 0) {
+  const list = [{ x: 0, y: HEIGHT - 44, w: WIDTH, ground: true }];
+  let x = WIDTH / 2 - 45;
+  const spread = 110 + Math.min(220, score * 0.05);
+  for (let i = 0; i < 13; i += 1) {
+    x = clamp(x + Math.random() * spread - spread / 2, 24, WIDTH - 110);
+    list.push({ x, y: HEIGHT - 120 - i * 80, w: 92, ground: false });
   }
+  return list;
 }
 
-function safeSetHighScore(v) {
-  try {
-    if (typeof window === "undefined") return;
-    window.localStorage.setItem(STORAGE_KEY, String(v));
-  } catch {}
-}
-
-function getSavedName() {
-  try {
-    if (typeof window === "undefined") return "YOU";
-    return window.localStorage.getItem(PLAYER_NAME_KEY) || "YOU";
-  } catch {
-    return "YOU";
-  }
-}
-
-function saveName(name) {
-  try {
-    if (typeof window === "undefined") return;
-    window.localStorage.setItem(PLAYER_NAME_KEY, name || "YOU");
-  } catch {}
-}
-
-function makeMockLeaderboard(myScore = 0, myName = "YOU") {
-  const names = ["Luna", "Kai", "Mio", "Sora", "Neko", "Rin", "Aoi", "Yuzu", "Leo", "Hana", "Taro", "Noa", "Kiki", "Zen", "Mugi", "Ivy", "Rio", "Coco", "Ray", "Nina"];
+function makeLeaderboard(myScore, myName) {
+  const names = ["Luna", "Kai", "Mio", "Sora", "Neko", "Rin", "Aoi", "Yuzu", "Leo", "Hana"];
   const rows = Array.from({ length: 99 }, (_, i) => ({
-    id: `bot-${i}`,
-    name: names[i % names.length] + String(Math.floor(i / names.length) + 1),
-    score: Math.max(80, Math.floor(5200 - i * 42 + Math.sin(i * 3.1) * 130)),
+    id: `cpu-${i}`,
+    name: `${names[i % names.length]}${Math.floor(i / names.length) + 1}`,
+    score: Math.max(60, Math.floor(5200 - i * 44 + Math.sin(i * 2.7) * 100)),
   }));
   rows.push({ id: "me", name: myName || "YOU", score: myScore, me: true });
-  return rows.sort((a, b) => b.score - a.score).slice(0, 100).map((r, i) => ({ ...r, rank: i + 1 }));
+  return rows.sort((a, b) => b.score - a.score).slice(0, 100).map((row, index) => ({ ...row, rank: index + 1 }));
 }
 
-function makePlatforms(startY = HEIGHT - 120, heightScore = 0) {
-  let lastX = WIDTH / 2 - 45;
-  const spread = 70 + Math.min(120, heightScore * 0.3);
-  const themes = ["gold", "cyan", "violet"];
-  return [
-    { id: "ground", x: 0, y: GROUND_Y, w: WIDTH, ground: true, theme: "green" },
-    ...Array.from({ length: PLATFORM_COUNT }, (_, i) => {
-      const x = clamp(lastX + (Math.random() * spread - spread / 2), 20, WIDTH - 110);
-      lastX = x;
-      return { id: i, x, y: startY - i * 80, w: 92, theme: themes[i % themes.length] };
-    }),
-  ];
+function findReachableSpot(platforms, playerY, fallbackX) {
+  const target = platforms
+    .filter((p) => !p.ground && p.y < playerY - 35 && p.y > playerY - 260)
+    .sort((a, b) => b.y - a.y)[0];
+  if (!target) return { x: clamp(fallbackX, 44, WIDTH - 44), y: playerY - 100 };
+  return { x: clamp(target.x + target.w / 2, 44, WIDTH - 44), y: target.y - 34 };
 }
 
-function makeConfetti(x, y, amount = 50) {
-  const colors = ["#facc15", "#38bdf8", "#c084fc", "#fb7185", "#4ade80", "#ffffff"];
-  return Array.from({ length: amount }, (_, i) => ({
-    type: "confetti",
-    x,
-    y,
-    vx: (Math.random() - 0.5) * 7,
-    vy: -2 - Math.random() * 7,
-    life: 1,
-    size: 3 + Math.random() * 5,
-    rot: Math.random() * Math.PI,
-    vr: (Math.random() - 0.5) * 0.25,
-    color: colors[i % colors.length],
-  }));
+function getBossType(score) {
+  const stage = Math.floor(score / 1000);
+  return BOSS_TYPES[Math.min(BOSS_TYPES.length - 1, stage)];
 }
 
-function findReachablePowerupSpot(platforms, playerY, fallbackX) {
-  const candidates = platforms.filter((pl) => !pl.ground && pl.y < playerY - 35 && pl.y > playerY - 260).sort((a, b) => b.y - a.y);
-  const platform = candidates[0];
-  if (!platform) return { x: clamp(fallbackX, 42, WIDTH - 42), y: playerY - 95 };
-  return { x: clamp(platform.x + platform.w / 2, 42, WIDTH - 42), y: platform.y - 34 };
+function getBossHp(score) {
+  const stage = Math.floor(score / 1000);
+  return 120 + stage * 80 + stage * stage * 20;
 }
 
-function App() {
+function runSelfTests() {
+  console.assert(clamp(5, 0, 10) === 5, "clamp keeps value in range");
+  console.assert(clamp(-1, 0, 10) === 0, "clamp applies min");
+  console.assert(clamp(11, 0, 10) === 10, "clamp applies max");
+  console.assert(getBackgroundColors(500).length === 3, "background returns three colors");
+  console.assert(makePlatforms().length > 1, "platforms are generated");
+  console.assert(makeLeaderboard(999, "YOU").length === 100, "leaderboard has 100 rows");
+  console.assert(Array.isArray(AREA_ENEMIES.night), "AREA_ENEMIES.night exists");
+  console.assert(Array.isArray(AREA_ENEMIES[getArea(3500)]), "AREA_ENEMIES supports score-derived areas");
+  console.assert(typeof POWERUP_DURATION === "number" && POWERUP_DURATION > 0, "POWERUP_DURATION is defined");
+  console.assert(getBossType(0) === "core", "first boss should be core");
+  console.assert(getBossType(2500) === "void", "higher bosses should change type");
+  console.assert(getBossHp(3000) > getBossHp(1000), "boss HP should scale upward");
+}
+
+export default function App() {
   const canvasRef = useRef(null);
   const keys = useRef({ left: false, right: false });
   const player = useRef({ x: WIDTH / 2, y: HEIGHT - 120, vx: 0, vy: 0, r: 15 });
   const platforms = useRef(makePlatforms());
   const enemies = useRef([]);
-  const powerups = useRef([]);
-  const powers = useRef({ shield: 0, magnet: 0, slow: 0 });
-  const particles = useRef([]);
   const bullets = useRef([]);
+  const bossBullets = useRef([]);
+  const items = useRef([]);
+  const particles = useRef([]);
+  const floatingTexts = useRef([]);
+  const powers = useRef({ shield: 0, magnet: 0, slow: 0 });
   const weapon = useRef({ rapid: 1, spread: 0, power: 1, orbit: 0, cooldown: 0, orbitAngle: 0 });
-  const pickupTexts = useRef([]);
   const cameraY = useRef(0);
   const best = useRef(0);
+  const nextBoss = useRef(1000);
+  const nextToast = useRef(500);
+  const time = useRef(0);
   const running = useRef(false);
+  const deadRef = useRef(false);
   const pausedRef = useRef(false);
   const startedRef = useRef(false);
-  const isDead = useRef(false);
-  const time = useRef(0);
-  const nextMilestone = useRef(MILESTONE_STEP);
-  const nextBoss = useRef(1000);
-  const celebration = useRef({ active: false, timer: 0, height: 0 });
+  const highScoreRef = useRef(Number(safeGet(STORAGE_KEY, "0")) || 0);
 
-  const highScoreRef = useRef(safeGetHighScore());
-  const [score, setScore] = useState(0);
-  const [highScore, setHighScore] = useState(() => highScoreRef.current);
-  const [dead, setDead] = useState(false);
-  const [started, setStarted] = useState(false);
-  const [paused, setPaused] = useState(false);
   const [screen, setScreen] = useState("home");
-  const [playerName, setPlayerName] = useState(getSavedName);
-  const [leaderboard, setLeaderboard] = useState(() => makeMockLeaderboard(safeGetHighScore(), getSavedName()));
+  const [score, setScore] = useState(0);
+  const [highScore, setHighScore] = useState(highScoreRef.current);
+  const [dead, setDead] = useState(false);
+  const [paused, setPaused] = useState(false);
+  const [started, setStarted] = useState(false);
+  const [playerName, setPlayerName] = useState(() => safeGet(NAME_KEY, "YOU"));
+  const [leaderboard, setLeaderboard] = useState(() => makeLeaderboard(highScoreRef.current, safeGet(NAME_KEY, "YOU")));
+
+  const addText = (text, x, y, color = "#fff") => {
+    floatingTexts.current.push({ text, x, y, color, life: 1 });
+  };
+
+  const addBurst = (x, y, amount = 20, color = "#facc15") => {
+    for (let i = 0; i < amount; i += 1) {
+      particles.current.push({
+        x,
+        y,
+        vx: (Math.random() - 0.5) * 5,
+        vy: -Math.random() * 5,
+        life: 1,
+        size: 2 + Math.random() * 3,
+        color,
+      });
+    }
+  };
+
+  const applyUpgrade = (type) => {
+    if (type === "rapid") weapon.current.rapid = Math.min(12, weapon.current.rapid + 1);
+    if (type === "spread") weapon.current.spread = Math.min(12, weapon.current.spread + 1);
+    if (type === "power") weapon.current.power = Math.min(8, weapon.current.power + 1);
+    if (type === "orbit") weapon.current.orbit = Math.min(6, weapon.current.orbit + 1);
+    addText(`UPGRADE ${type.toUpperCase()}`, WIDTH / 2, cameraY.current + 96, "#facc15");
+  };
 
   const reset = () => {
     player.current = { x: WIDTH / 2, y: HEIGHT - 120, vx: 0, vy: 0, r: 15 };
     platforms.current = makePlatforms();
     enemies.current = [];
-    powerups.current = [];
-    powers.current = { shield: 0, magnet: 0, slow: 0 };
-    particles.current = [];
     bullets.current = [];
-    pickupTexts.current = [];
+    bossBullets.current = [];
+    items.current = [];
+    particles.current = [];
+    floatingTexts.current = [];
+    powers.current = { shield: 0, magnet: 0, slow: 0 };
     weapon.current = { rapid: 1, spread: 0, power: 1, orbit: 0, cooldown: 0, orbitAngle: 0 };
     cameraY.current = 0;
     best.current = 0;
-    nextMilestone.current = MILESTONE_STEP;
     nextBoss.current = 1000;
-    celebration.current = { active: false, timer: 0, height: 0 };
+    nextToast.current = 500;
     running.current = true;
+    deadRef.current = false;
     pausedRef.current = false;
     startedRef.current = true;
-    isDead.current = false;
     setScore(0);
     setDead(false);
     setPaused(false);
     setStarted(true);
+  };
+
+  const gameOver = () => {
+    running.current = false;
+    deadRef.current = true;
+    pausedRef.current = false;
+    const finalScore = Math.floor(best.current);
+    const nextHigh = Math.max(highScoreRef.current, finalScore);
+    highScoreRef.current = nextHigh;
+    safeSet(STORAGE_KEY, nextHigh);
+    setHighScore(nextHigh);
+    setLeaderboard(makeLeaderboard(nextHigh, playerName));
+    setPaused(false);
+    setDead(true);
   };
 
   const startGame = () => {
@@ -231,71 +250,51 @@ function App() {
     running.current = false;
     pausedRef.current = false;
     startedRef.current = false;
-    isDead.current = false;
-    setPaused(false);
-    setDead(false);
-    setStarted(false);
-    setScreen("home");
+    deadRef.current = false;
     keys.current.left = false;
     keys.current.right = false;
-  };
-
-  const openLeaderboard = () => {
-    setLeaderboard(makeMockLeaderboard(highScore, playerName));
-    setScreen("leaderboard");
-  };
-
-  const gameOver = () => {
-    running.current = false;
-    pausedRef.current = false;
-    isDead.current = true;
-    const finalScore = Math.floor(best.current);
-    const nextHighScore = Math.max(highScoreRef.current, finalScore);
-    highScoreRef.current = nextHighScore;
-    safeSetHighScore(nextHighScore);
-    setHighScore(nextHighScore);
-    setLeaderboard(makeMockLeaderboard(nextHighScore, playerName));
     setPaused(false);
-    setDead(true);
+    setStarted(false);
+    setDead(false);
+    setScreen("home");
   };
 
   const togglePause = () => {
-    if (!startedRef.current || isDead.current) return;
+    if (!startedRef.current || deadRef.current) return;
     pausedRef.current = !pausedRef.current;
     setPaused(pausedRef.current);
   };
 
-  const celebrate = (height) => {
-    celebration.current = { active: true, timer: 70, height };
-    particles.current.push(...makeConfetti(WIDTH / 2, cameraY.current + 110, 24));
-  };
-
-  const applyUpgrade = (type) => {
-    if (type === "rapid") weapon.current.rapid = Math.min(12, weapon.current.rapid + 1);
-    if (type === "spread") weapon.current.spread = Math.min(12, weapon.current.spread + 1);
-    if (type === "power") weapon.current.power = Math.min(8, weapon.current.power + 1);
-    if (type === "orbit") weapon.current.orbit = Math.min(6, weapon.current.orbit + 1);
-    pickupTexts.current.push({ x: WIDTH / 2, y: cameraY.current + 95, life: 1, text: `UPGRADE ${type.toUpperCase()}`, color: "#facc15" });
+  const openLeaderboard = () => {
+    setLeaderboard(makeLeaderboard(highScoreRef.current, playerName));
+    setScreen("leaderboard");
   };
 
   useEffect(() => {
-    if (typeof document === "undefined") return;
+    runSelfTests();
+  }, []);
+
+  useEffect(() => {
+    if (typeof document === "undefined") return undefined;
     document.body.style.margin = "0";
     document.body.style.overflow = "hidden";
     document.body.style.touchAction = "none";
-    const down = (e) => {
-      if (["ArrowLeft", "ArrowRight", "a", "A", "d", "D", " "].includes(e.key)) e.preventDefault();
-      if (e.key === "ArrowLeft" || e.key === "a" || e.key === "A") keys.current.left = true;
-      if (e.key === "ArrowRight" || e.key === "d" || e.key === "D") keys.current.right = true;
-      if (e.key === " ") {
-        if (!startedRef.current || isDead.current) reset();
+
+    const down = (event) => {
+      if (["ArrowLeft", "ArrowRight", "a", "A", "d", "D", " "].includes(event.key)) event.preventDefault();
+      if (event.key === "ArrowLeft" || event.key === "a" || event.key === "A") keys.current.left = true;
+      if (event.key === "ArrowRight" || event.key === "d" || event.key === "D") keys.current.right = true;
+      if (event.key === " ") {
+        if (!startedRef.current || deadRef.current) reset();
         else togglePause();
       }
     };
-    const up = (e) => {
-      if (e.key === "ArrowLeft" || e.key === "a" || e.key === "A") keys.current.left = false;
-      if (e.key === "ArrowRight" || e.key === "d" || e.key === "D") keys.current.right = false;
+
+    const up = (event) => {
+      if (event.key === "ArrowLeft" || event.key === "a" || event.key === "A") keys.current.left = false;
+      if (event.key === "ArrowRight" || event.key === "d" || event.key === "D") keys.current.right = false;
     };
+
     window.addEventListener("keydown", down, { passive: false });
     window.addEventListener("keyup", up);
     return () => {
@@ -307,11 +306,11 @@ function App() {
   }, []);
 
   useEffect(() => {
-    if (screen !== "game") return;
+    if (screen !== "game") return undefined;
     const canvas = canvasRef.current;
-    if (!canvas) return;
+    if (!canvas) return undefined;
     const ctx = canvas.getContext("2d");
-    let raf;
+    let raf = 0;
 
     const rounded = (x, y, w, h, r, fill = true) => {
       ctx.beginPath();
@@ -330,35 +329,130 @@ function App() {
     };
 
     const spawnBoss = () => {
+      const type = getBossType(best.current);
+      const hp = getBossHp(best.current);
+      enemies.current.push({
+        boss: true,
+        type,
+        x: WIDTH / 2,
+        y: cameraY.current + 84,
+        vx: 0,
+        vy: 0,
+        hp,
+        maxHp: hp,
+        t: 0,
+        dashTimer: 240,
+        attackDelay: 160,
+        shotTimer: 130,
+      });
+      const names = { core: "異形核", hunter: "追跡者", void: "虚無の主", overlord: "支配者" };
+      addText(names[type] || "BOSS", WIDTH / 2, cameraY.current + 120, "#fb7185");
+    };
+
+    const fireBossPattern = (enemy, p) => {
       const stage = Math.floor(best.current / 1000);
-      const type = stage < 2 ? "core" : stage < 4 ? "hunter" : "void";
-      const baseHp = 48 + stage * 30;
-      enemies.current.push({ boss: true, type, x: WIDTH / 2, y: cameraY.current + 80, vx: 0, vy: 0, hp: baseHp, maxHp: baseHp, t: 0, dashTimer: 220, attackDelay: 180 });
-      const names = { core: "異形核", hunter: "追跡者", void: "虚無の主" };
-      pickupTexts.current.push({ x: WIDTH / 2, y: cameraY.current + 120, life: 1, text: names[type], color: "#fb7185" });
+      const phase2 = enemy.hp <= enemy.maxHp * 0.5;
+
+      enemy.shotTimer = Math.max(0, (enemy.shotTimer || 0) - 1);
+      if (enemy.attackDelay > 0 || enemy.shotTimer > 0) return;
+
+      // フェーズで弾幕を変化
+      let bulletCount;
+      let spread;
+      let speed;
+
+      if (!phase2) {
+        // 通常
+        bulletCount = 3 + stage;
+        spread = 1.2 + stage * 0.1;
+        speed = 2 + stage * 0.1;
+      } else {
+        // HP50%以下：強化モード（広がり＋回転弾）
+        bulletCount = 6 + stage * 2;
+        spread = 2.5 + stage * 0.2;
+        speed = 2.8 + stage * 0.2;
+
+        // 回転弾追加
+        const spinCount = 8 + stage * 2;
+        for (let i = 0; i < spinCount; i++) {
+          const angle = enemy.t * 0.1 + (Math.PI * 2 * i) / spinCount;
+          bossBullets.current.push({
+            x: enemy.x,
+            y: enemy.y,
+            vx: Math.cos(angle) * speed * 0.7,
+            vy: Math.sin(angle) * speed * 0.7,
+            r: 3 + stage * 0.3,
+            life: 200,
+          });
+        }
+      }
+
+      const baseAngle = Math.atan2(p.y - enemy.y, p.x - enemy.x);
+
+      for (let i = 0; i < bulletCount; i += 1) {
+        const offset = (i - (bulletCount - 1) / 2) * (spread / Math.max(1, bulletCount - 1));
+        const angle = baseAngle + offset;
+        bossBullets.current.push({
+          x: enemy.x,
+          y: enemy.y,
+          vx: Math.cos(angle) * speed,
+          vy: Math.sin(angle) * speed,
+          r: 4 + stage * 0.3,
+          life: 200,
+        });
+      }
+
+      enemy.shotTimer = phase2 ? Math.max(20, 80 - stage * 6) : Math.max(35, 115 - stage * 7);
+    };
+
+    const spawnEnemy = () => {
+      const area = getArea(best.current);
+      const pool = AREA_ENEMIES[area] || ENEMY_TYPES;
+      const type = pool[Math.floor(Math.random() * pool.length)];
+      const lanes = [58, WIDTH / 2 - 14, WIDTH - 86];
+      let lane = Math.floor(Math.random() * lanes.length);
+      let x = lanes[lane];
+      if (Math.abs(x - player.current.x) < 52) {
+        const safeLane = lanes.findIndex((laneX) => Math.abs(laneX - player.current.x) > 72);
+        if (safeLane >= 0) {
+          lane = safeLane;
+          x = lanes[safeLane];
+        }
+      }
+      enemies.current.push({
+        boss: false,
+        type,
+        x,
+        y: cameraY.current - 120,
+        t: Math.random() * 10,
+        dir: Math.random() < 0.5 ? -1 : 1,
+        lane,
+        wind: type === "seeker" ? 48 : 0,
+      });
     };
 
     const update = () => {
       const p = player.current;
-      const currentArea = getArea(best.current);
       const difficulty = Math.min(1, best.current / 550);
       const chaos = Math.min(1, best.current / 5200);
+      const bossAlive = enemies.current.some((enemy) => enemy.boss && !enemy.dead);
 
       weapon.current.cooldown -= 1;
       const fireRate = Math.max(5, 22 - weapon.current.rapid * 2);
       if (weapon.current.cooldown <= 0) {
         weapon.current.cooldown = fireRate;
         const count = Math.min(14, 1 + weapon.current.spread);
-        for (let i = 0; i < count; i++) {
+        for (let i = 0; i < count; i += 1) {
           const offset = i - (count - 1) / 2;
-          bullets.current.push({ x: p.x + offset * 6, y: p.y - 14, vx: offset * 0.22, vy: -8.2, r: 2.8 + weapon.current.power * 0.15, damage: weapon.current.power });
+          bullets.current.push({ x: p.x + offset * 6, y: p.y - 14, vx: offset * 0.22, vy: -8.2, r: 3, damage: weapon.current.power });
         }
       }
+
       if (weapon.current.orbit > 0) {
         weapon.current.orbitAngle += 0.08;
-        for (let i = 0; i < weapon.current.orbit; i++) {
-          const a = weapon.current.orbitAngle + (Math.PI * 2 * i) / weapon.current.orbit;
-          bullets.current.push({ x: p.x + Math.cos(a) * 32, y: p.y + Math.sin(a) * 32, vx: 0, vy: -0.15, r: 4, damage: Math.max(1, weapon.current.power - 1), kind: "orbit", life: 18 });
+        for (let i = 0; i < weapon.current.orbit; i += 1) {
+          const angle = weapon.current.orbitAngle + (Math.PI * 2 * i) / weapon.current.orbit;
+          bullets.current.push({ x: p.x + Math.cos(angle) * 32, y: p.y + Math.sin(angle) * 32, vx: 0, vy: -0.15, r: 4, damage: Math.max(1, weapon.current.power - 1), life: 18, kind: "orbit" });
         }
       }
 
@@ -371,15 +465,16 @@ function App() {
       if (p.x < -p.r) p.x = WIDTH + p.r;
       if (p.x > WIDTH + p.r) p.x = -p.r;
 
-      platforms.current.forEach((pl) => {
-        const prevY = p.y - p.vy;
-        if (p.vy > 0 && prevY + p.r <= pl.y && p.y + p.r >= pl.y && p.x > pl.x - p.r && p.x < pl.x + pl.w + p.r) {
+      platforms.current.forEach((platform) => {
+        const previousY = p.y - p.vy;
+        const landed = p.vy > 0 && previousY + p.r <= platform.y && p.y + p.r >= platform.y;
+        const withinX = p.x > platform.x - p.r && p.x < platform.x + platform.w + p.r;
+        if (landed && withinX) {
           p.vy = JUMP;
-          for (let i = 0; i < 9; i++) particles.current.push({ type: "dust", x: p.x, y: pl.y, life: 1, vx: (Math.random() - 0.5) * 2.8, vy: -Math.random() * 2.3, size: 1.5 + Math.random() * 2, color: "#fef08a" });
+          addBurst(p.x, platform.y, 8, "#fef08a");
         }
       });
 
-      const bossAlive = enemies.current.some((e) => e.boss && !e.dead);
       if (!bossAlive && best.current >= nextBoss.current) {
         spawnBoss();
         nextBoss.current += 1000;
@@ -387,96 +482,59 @@ function App() {
 
       const maxEnemies = bossAlive ? 5 : Math.floor(3 + chaos * 22);
       const spawnRate = bossAlive ? 0.002 + chaos * 0.006 : 0.002 + chaos * 0.018;
-      const lanes = [60, WIDTH / 2 - 14, WIDTH - 88];
-      const activeLanes = enemies.current.filter((e) => !e.boss && e.y < cameraY.current + 120 && e.y > cameraY.current - 200).map((e) => e.lane).filter((l) => l != null);
-      if (enemies.current.filter((e) => !e.boss).length < maxEnemies && Math.random() < spawnRate) {
-        const availableIdx = lanes.map((_, i) => i).filter((i) => !activeLanes.includes(i));
-        let laneIndex = availableIdx.length ? availableIdx[Math.floor(Math.random() * availableIdx.length)] : Math.floor(Math.random() * lanes.length);
-        let x = lanes[laneIndex];
-        if (Math.abs(x - p.x) < 50) {
-          const alt = lanes.findIndex((lx) => Math.abs(lx - p.x) > 70);
-          if (alt >= 0) {
-            laneIndex = alt;
-            x = lanes[alt];
-          }
-        }
-        const pool = AREA_ENEMIES[currentArea] || AREA_ENEMIES.night;
-        const type = pool[Math.floor(Math.random() * pool.length)];
-        enemies.current.push({ x, y: cameraY.current - 120, rot: Math.random() * 10, type, t: 0, dir: Math.random() < 0.5 ? -1 : 1, lane: laneIndex, state: type === "seeker" ? "windup" : "active", wind: 40 + Math.floor(Math.random() * 30) });
+      if (enemies.current.filter((enemy) => !enemy.boss).length < maxEnemies && Math.random() < spawnRate) {
+        spawnEnemy();
       }
 
-      const powerupSpawnRate = 0.00075 + difficulty * 0.00045;
-      const upgradeSpawnRate = 0.00035 + difficulty * 0.0003;
-      if (powerups.current.length < 2 && Math.random() < powerupSpawnRate) {
-        const s = findReachablePowerupSpot(platforms.current, p.y, p.x);
-        powerups.current.push({ x: s.x, y: s.y, type: POWERUP_TYPES[Math.floor(Math.random() * POWERUP_TYPES.length)], spin: Math.random() * Math.PI });
+      const powerRate = 0.0007 + difficulty * 0.0004;
+      const upgradeRate = 0.00035 + difficulty * 0.0003;
+      if (items.current.length < 2 && Math.random() < powerRate) {
+        const spot = findReachableSpot(platforms.current, p.y, p.x);
+        items.current.push({ x: spot.x, y: spot.y, type: POWER_TYPES[Math.floor(Math.random() * POWER_TYPES.length)], spin: 0 });
       }
-      if (powerups.current.length < 2 && Math.random() < upgradeSpawnRate) {
-        const s = findReachablePowerupSpot(platforms.current, p.y, p.x);
-        powerups.current.push({ x: s.x, y: s.y, type: "upgrade", spin: Math.random() * Math.PI });
+      if (items.current.length < 2 && Math.random() < upgradeRate) {
+        const spot = findReachableSpot(platforms.current, p.y, p.x);
+        items.current.push({ x: spot.x, y: spot.y, type: "upgrade", spin: 0 });
       }
 
       enemies.current.forEach((enemy) => {
-        const sy = enemy.y - cameraY.current;
-        if (enemy.boss) {
-          ctx.save();
-          ctx.translate(enemy.x, sy);
-          const phase2 = enemy.hp <= enemy.maxHp * 0.45;
+        bullets.current.forEach((bullet) => {
+          const ex = enemy.boss ? enemy.x : enemy.x + 14;
+          const ey = enemy.boss ? enemy.y : enemy.y + 12;
+          const range = enemy.boss ? 38 : 20;
+          if (Math.abs(bullet.x - ex) < range && Math.abs(bullet.y - ey) < range) {
+            bullet.hit = true;
+            if (enemy.boss) {
+              enemy.hp -= bullet.damage || 1;
+              if (enemy.hp <= 0) {
+                enemy.dead = true;
+                best.current += 150;
 
-          // シンプルで視認性高いボス
-          ctx.shadowColor = phase2 ? "#ff4d6d" : "#ff0000";
-          ctx.shadowBlur = 25;
-          ctx.fillStyle = phase2 ? "#ff4d6d" : "#ff3b3b";
-          ctx.beginPath();
-          ctx.arc(0, 0, 26, 0, Math.PI * 2);
-          ctx.fill();
+                // ボス撃破報酬：複数ドロップ
+                const dropCount = 3 + Math.floor(Math.random() * 3);
+                for (let i = 0; i < dropCount; i++) {
+                  const spot = findReachableSpot(platforms.current, p.y, enemy.x + (Math.random() - 0.5) * 80);
+                  const isUpgrade = Math.random() < 0.5;
+                  items.current.push({
+                    x: spot.x,
+                    y: spot.y,
+                    type: isUpgrade ? "upgrade" : POWER_TYPES[Math.floor(Math.random() * POWER_TYPES.length)],
+                    spin: Math.random() * Math.PI,
+                  });
+                }
 
-          // 目
-          ctx.fillStyle = "#000";
-          ctx.beginPath();
-          ctx.arc(-8, -4, 3, 0, Math.PI * 2);
-          ctx.arc(8, -4, 3, 0, Math.PI * 2);
-          ctx.fill();
+                // 追加で確定アップグレード1つ
+                applyUpgrade(UPGRADE_TYPES[Math.floor(Math.random() * UPGRADE_TYPES.length)]);
 
-          // HPバー
-          ctx.fillStyle = "rgba(0,0,0,0.6)";
-          rounded(-30, -44, 60, 6, 3);
-          ctx.fillStyle = "#00ffcc";
-          rounded(-30, -44, 60 * clamp(enemy.hp / enemy.maxHp, 0, 1), 6, 3);
-
-          ctx.restore();
-          return;
-        }
-
-        // 通常敵（見やすさ重視）
-        ctx.save();
-        ctx.translate(enemy.x + 14, sy + 12);
-
-        const colorMap = {
-          seeker: "#ff4d6d",
-          zigzag: "#ff7a00",
-          swoop: "#00d4ff",
-          patrol: "#a855f7",
-        };
-
-        const c = colorMap[enemy.type] || "#ff3b3b";
-
-        ctx.shadowColor = c;
-        ctx.shadowBlur = 12;
-        ctx.fillStyle = c;
-
-        ctx.beginPath();
-        ctx.arc(0, 0, 12, 0, Math.PI * 2);
-        ctx.fill();
-
-        // 目（白で視認性UP）
-        ctx.fillStyle = "#fff";
-        ctx.beginPath();
-        ctx.arc(-4, -2, 2, 0, Math.PI * 2);
-        ctx.arc(4, -2, 2, 0, Math.PI * 2);
-        ctx.fill();
-
-        ctx.restore();
+                addText("BOSS BREAK!", enemy.x, enemy.y - 40, "#facc15");
+                addBurst(enemy.x, enemy.y, 90, "#facc15");
+              }
+            } else {
+              enemy.dead = true;
+              addBurst(ex, ey, 8, "#fb7185");
+            }
+          }
+        });
       });
 
       enemies.current.forEach((enemy) => {
@@ -486,50 +544,68 @@ function App() {
           const phase2 = enemy.hp <= enemy.maxHp * 0.45;
           const stage = Math.floor(best.current / 1000);
           const targetX = p.x;
-          const targetY = cameraY.current + (phase2 ? 94 : 82) + Math.sin(enemy.t * 0.035) * 18;
+          const targetY = cameraY.current + (phase2 ? 96 : 82) + Math.sin(enemy.t * 0.035) * 18;
           const dx = targetX - enemy.x;
           const dy = targetY - enemy.y;
-          const moveFactor = enemy.type === "void" ? 0.02 : enemy.type === "hunter" ? 0.017 : 0.014;
-          enemy.vx = (enemy.vx || 0) * 0.92 + dx * moveFactor;
-          enemy.vy = (enemy.vy || 0) * 0.92 + dy * moveFactor;
-          const maxBossSpeed = phase2 ? 2.4 + stage * 0.2 : 1.8 + stage * 0.15;
-          const sp = Math.hypot(enemy.vx, enemy.vy);
-          if (sp > maxBossSpeed) {
-            enemy.vx = (enemy.vx / sp) * maxBossSpeed;
-            enemy.vy = (enemy.vy / sp) * maxBossSpeed;
+          const moveFactor = enemy.type === "overlord" ? 0.024 : enemy.type === "void" ? 0.02 : enemy.type === "hunter" ? 0.017 : 0.014;
+          enemy.vx = enemy.vx * 0.92 + dx * moveFactor;
+          enemy.vy = enemy.vy * 0.92 + dy * moveFactor;
+          const limit = phase2 ? 3.2 + stage * 0.25 : 1.8 + stage * 0.15;
+          const speed = Math.hypot(enemy.vx, enemy.vy);
+          if (speed > limit) {
+            enemy.vx = (enemy.vx / speed) * limit;
+            enemy.vy = (enemy.vy / speed) * limit;
           }
-          enemy.attackDelay = Math.max(0, (enemy.attackDelay || 0) - 1);
+          enemy.attackDelay = Math.max(0, enemy.attackDelay - 1);
           enemy.dashTimer -= 1;
+          fireBossPattern(enemy, p);
           if (enemy.attackDelay <= 0 && enemy.dashTimer <= 0) {
             const ax = p.x - enemy.x;
             const ay = p.y - enemy.y;
-            const ad = Math.hypot(ax, ay) || 1;
-            const dash = enemy.type === "void" ? 4.2 : enemy.type === "hunter" ? 3.6 : 3.0;
-            enemy.vx += (ax / ad) * dash;
-            enemy.vy += (ay / ad) * dash;
-            enemy.dashTimer = Math.max(105, 180 - stage * 10);
-            pickupTexts.current.push({ x: enemy.x, y: enemy.y - 40, life: 0.7, text: "予兆", color: "#fb7185" });
+            const d = Math.hypot(ax, ay) || 1;
+
+            // フェーズ2は突進強化
+            const dash = phase2
+              ? 6.5 + stage * 0.4
+              : enemy.type === "overlord"
+              ? 4.8
+              : enemy.type === "void"
+              ? 4.2
+              : enemy.type === "hunter"
+              ? 3.6
+              : 3.0;
+
+            enemy.vx += (ax / d) * dash;
+            enemy.vy += (ay / d) * dash;
+
+            enemy.dashTimer = phase2
+              ? Math.max(60, 120 - stage * 8)
+              : Math.max(105, 180 - stage * 10);
+
+            addText(phase2 ? "激怒" : "予兆", enemy.x, enemy.y - 40, "#fb7185");
           }
           enemy.x = clamp(enemy.x + enemy.vx, 36, WIDTH - 36);
           enemy.y = clamp(enemy.y + enemy.vy, cameraY.current + 56, cameraY.current + HEIGHT * 0.38);
           if (Math.abs(enemy.x - p.x) < 42 && Math.abs(enemy.y - p.y) < 42) {
             if (powers.current.shield > 0) {
-              enemy.hp -= 5;
               powers.current.shield = 0;
-              particles.current.push(...makeConfetti(p.x, p.y, 36));
-            } else gameOver();
+              enemy.hp -= 5;
+              addBurst(p.x, p.y, 25, "#67e8f9");
+            } else {
+              gameOver();
+            }
           }
           return;
         }
+
         const baseSpeed = (powers.current.slow > 0 ? 0.65 : 1) * (1.45 + difficulty * 1.55);
         enemy.t += 0.05;
         let vx = 0;
         let vy = baseSpeed;
         if (enemy.type === "seeker") {
-          if (enemy.state === "windup") {
+          if (enemy.wind > 0) {
             enemy.wind -= 1;
             vy *= 0.5;
-            if (enemy.wind <= 0) enemy.state = "active";
           } else {
             const dx = p.x - (enemy.x + 14);
             const dy = p.y - (enemy.y + 12);
@@ -537,8 +613,9 @@ function App() {
             vx = (dx / d) * (0.8 + difficulty * 1.2);
             vy = baseSpeed + (dy > 0 ? 0.6 : 0);
           }
-        } else if (enemy.type === "zigzag") vx = Math.sin(enemy.t * 3) * (1.5 + difficulty * 2);
-        else if (enemy.type === "swoop") {
+        } else if (enemy.type === "zigzag") {
+          vx = Math.sin(enemy.t * 3) * (1.5 + difficulty * 2);
+        } else if (enemy.type === "swoop") {
           vx = Math.sin(enemy.t * 2) * 2.2;
           vy = baseSpeed + Math.abs(Math.sin(enemy.t * 2)) * 2.2;
         } else if (enemy.type === "patrol") {
@@ -547,107 +624,163 @@ function App() {
         }
         enemy.x += vx;
         enemy.y += vy;
-        enemy.rot += 0.075 + Math.abs(vx) * 0.02;
         if (Math.abs(enemy.x + 14 - p.x) < 24 && Math.abs(enemy.y + 12 - p.y) < 24) {
           if (powers.current.shield > 0) {
-            enemy.dead = true;
             powers.current.shield = 0;
-            particles.current.push(...makeConfetti(p.x, p.y, 30));
-          } else gameOver();
+            enemy.dead = true;
+            addBurst(p.x, p.y, 18, "#67e8f9");
+          } else {
+            gameOver();
+          }
         }
       });
-      enemies.current = enemies.current.filter((e) => !e.dead && (e.boss || e.y - cameraY.current < HEIGHT + 90));
 
-      powerups.current.forEach((item) => {
+      enemies.current = enemies.current.filter((enemy) => !enemy.dead && (enemy.boss || enemy.y - cameraY.current < HEIGHT + 90));
+
+      bossBullets.current.forEach((bullet) => {
+        bullet.x += bullet.vx;
+        bullet.y += bullet.vy;
+        bullet.life -= 1;
+        if (Math.abs(bullet.x - p.x) < 18 && Math.abs(bullet.y - p.y) < 22) {
+          bullet.hit = true;
+          if (powers.current.shield > 0) {
+            powers.current.shield = 0;
+            addBurst(p.x, p.y, 16, "#67e8f9");
+          } else {
+            gameOver();
+          }
+        }
+      });
+      bossBullets.current = bossBullets.current.filter((bullet) => !bullet.hit && bullet.life > 0 && bullet.y > cameraY.current - 80 && bullet.y < cameraY.current + HEIGHT + 100 && bullet.x > -60 && bullet.x < WIDTH + 60);
+
+      items.current.forEach((item) => {
         item.spin += 0.06;
         if (powers.current.magnet > 0) {
           const dx = p.x - item.x;
           const dy = p.y - item.y;
-          const dist = Math.hypot(dx, dy);
-          if (dist < 95 && dist > 1) {
-            item.x += (dx / dist) * 3.2;
-            item.y += (dy / dist) * 3.2;
+          const d = Math.hypot(dx, dy);
+          if (d < 95 && d > 1) {
+            item.x += (dx / d) * 3.2;
+            item.y += (dy / d) * 3.2;
           }
         }
         if (Math.abs(item.x - p.x) < 28 && Math.abs(item.y - p.y) < 32) {
           item.taken = true;
-          const labelMap = { shield: "SHIELD!", magnet: "MAGNET!", slow: "SLOW!", clear: "CLEAR!", bonus: "+50", upgrade: "UPGRADE!" };
-          pickupTexts.current.push({ x: item.x, y: item.y - 20, life: 1, text: labelMap[item.type] || "POWER", color: "#fff" });
-          if (item.type === "clear") {
-            enemies.current = enemies.current.filter((e) => e.boss);
-            particles.current.push(...makeConfetti(p.x, p.y, 70));
-          } else if (item.type === "bonus") {
+          if (item.type === "bonus") {
             best.current += 50;
+            addText("+50", item.x, item.y - 20, "#facc15");
           } else if (item.type === "upgrade") {
             applyUpgrade(UPGRADE_TYPES[Math.floor(Math.random() * UPGRADE_TYPES.length)]);
-          } else powers.current[item.type] = (powers.current[item.type] || 0) + POWERUP_DURATION;
+          } else if (item.type === "clear") {
+            enemies.current = enemies.current.filter((enemy) => enemy.boss);
+            addText("CLEAR!", item.x, item.y - 20, "#fb7185");
+          } else {
+            powers.current[item.type] = (powers.current[item.type] || 0) + POWERUP_DURATION;
+            addText(item.type.toUpperCase(), item.x, item.y - 20, "#fff");
+          }
         }
       });
-      powerups.current = powerups.current.filter((item) => !item.taken && item.y - cameraY.current < HEIGHT + 120);
+      items.current = items.current.filter((item) => !item.taken && item.y - cameraY.current < HEIGHT + 120);
 
       Object.keys(powers.current).forEach((key) => {
         if (powers.current[key] > 0) powers.current[key] -= 1;
       });
-      particles.current.forEach((pt) => {
-        pt.x += pt.vx;
-        pt.y += pt.vy;
-        pt.vy += pt.type === "confetti" ? 0.12 : 0.04;
-        pt.rot = (pt.rot || 0) + (pt.vr || 0);
-        pt.life -= pt.type === "confetti" ? 0.012 : 0.028;
+      particles.current.forEach((particle) => {
+        particle.x += particle.vx;
+        particle.y += particle.vy;
+        particle.vy += 0.05;
+        particle.life -= 0.025;
       });
-      particles.current = particles.current.filter((pt) => pt.life > 0);
-      bullets.current.forEach((b) => {
-        b.x += b.vx || 0;
-        b.y += b.vy || 0;
-        if (b.life != null) b.life -= 1;
+      particles.current = particles.current.filter((particle) => particle.life > 0);
+      bullets.current.forEach((bullet) => {
+        bullet.x += bullet.vx || 0;
+        bullet.y += bullet.vy || 0;
+        if (bullet.life != null) bullet.life -= 1;
       });
-      bullets.current = bullets.current.filter((b) => !b.hit && b.y > cameraY.current - 80 && b.y < cameraY.current + HEIGHT + 80 && (b.life == null || b.life > 0));
-      pickupTexts.current.forEach((t) => {
-        t.y -= 0.6;
-        t.life -= 0.02;
+      bullets.current = bullets.current.filter((bullet) => !bullet.hit && bullet.y > cameraY.current - 80 && bullet.y < cameraY.current + HEIGHT + 80 && (bullet.life == null || bullet.life > 0));
+      floatingTexts.current.forEach((text) => {
+        text.y -= 0.6;
+        text.life -= 0.02;
       });
-      pickupTexts.current = pickupTexts.current.filter((t) => t.life > 0);
-      if (celebration.current.active) {
-        celebration.current.timer -= 1;
-        if (celebration.current.timer <= 0) celebration.current.active = false;
-      }
+      floatingTexts.current = floatingTexts.current.filter((text) => text.life > 0);
 
-      const targetCam = Math.min(cameraY.current, p.y - HEIGHT * 0.65);
-      cameraY.current += (targetCam - cameraY.current) * 0.1;
+      const targetCamera = Math.min(cameraY.current, p.y - HEIGHT * 0.65);
+      cameraY.current += (targetCamera - cameraY.current) * 0.1;
       best.current = Math.max(best.current, -cameraY.current / 8);
       const currentScore = Math.floor(best.current);
-      if (currentScore >= nextMilestone.current) {
-        celebrate(nextMilestone.current);
-        nextMilestone.current += MILESTONE_STEP;
+      if (currentScore >= nextToast.current) {
+        addText(`BONUS ${nextToast.current}m`, WIDTH / 2, cameraY.current + 94, "#facc15");
+        nextToast.current += 500;
       }
       setScore(currentScore);
       if (currentScore > highScoreRef.current) {
         highScoreRef.current = currentScore;
-        safeSetHighScore(currentScore);
+        safeSet(STORAGE_KEY, currentScore);
         setHighScore(currentScore);
       }
-      let top = Math.min(...platforms.current.map((pl) => pl.y));
-      let lastX = platforms.current.filter((pl) => !pl.ground).sort((a, b) => a.y - b.y)[0]?.x ?? WIDTH / 2;
-      platforms.current = platforms.current.map((pl) => {
-        if (pl.ground) return pl;
-        if (pl.y - cameraY.current > HEIGHT + 40) {
+
+      let top = Math.min(...platforms.current.map((platform) => platform.y));
+      let lastX = platforms.current.filter((platform) => !platform.ground).sort((a, b) => a.y - b.y)[0]?.x ?? WIDTH / 2;
+      platforms.current = platforms.current.map((platform) => {
+        if (platform.ground) return platform;
+        if (platform.y - cameraY.current > HEIGHT + 40) {
           top -= 80;
-          const spread = 70 + Math.min(130, best.current * 0.28);
-          const x = clamp(lastX + (Math.random() * spread - spread / 2), 20, WIDTH - 110);
+          const spread = 120 + Math.min(240, best.current * 0.05);
+          const x = clamp(lastX + Math.random() * spread - spread / 2, 20, WIDTH - 110);
           lastX = x;
-          const themes = ["gold", "cyan", "violet"];
-          return { ...pl, x, y: top, w: Math.max(72, 94 - difficulty * 16), theme: themes[Math.floor(Math.random() * themes.length)] };
+          return { ...platform, x, y: top, w: Math.max(72, 94 - difficulty * 16) };
         }
-        return pl;
+        return platform;
       });
+
       if (p.y - cameraY.current > HEIGHT + 80) gameOver();
+    };
+
+    const drawBossShape = (enemy) => {
+      if (enemy.type === "core") {
+        ctx.arc(0, 0, 26, 0, Math.PI * 2);
+      } else if (enemy.type === "hunter") {
+        ctx.moveTo(0, -30);
+        ctx.lineTo(27, 24);
+        ctx.lineTo(-27, 24);
+        ctx.closePath();
+      } else if (enemy.type === "void") {
+        for (let i = 0; i < 10; i += 1) {
+          const a = (Math.PI * 2 * i) / 10;
+          const r = i % 2 === 0 ? 30 : 14;
+          const x = Math.cos(a) * r;
+          const y = Math.sin(a) * r;
+          if (i === 0) ctx.moveTo(x, y);
+          else ctx.lineTo(x, y);
+        }
+        ctx.closePath();
+      } else {
+        ctx.rect(-28, -28, 56, 56);
+      }
+    };
+
+    const drawEnemyShape = (enemy) => {
+      if (enemy.type === "zigzag") {
+        ctx.rect(-10, -10, 20, 20);
+      } else if (enemy.type === "swoop") {
+        ctx.moveTo(0, -13);
+        ctx.lineTo(13, 12);
+        ctx.lineTo(-13, 12);
+        ctx.closePath();
+      } else if (enemy.type === "seeker") {
+        ctx.arc(0, 0, 12, 0, Math.PI * 2);
+      } else {
+        ctx.moveTo(-13, 0);
+        ctx.lineTo(0, -13);
+        ctx.lineTo(13, 0);
+        ctx.lineTo(0, 13);
+        ctx.closePath();
+      }
     };
 
     const draw = () => {
       ctx.clearRect(0, 0, WIDTH, HEIGHT);
-      const h = best.current;
-      const area = getArea(h);
-      const [topColor, midColor, bottomColor] = getSmoothSky(h);
+      const [topColor, midColor, bottomColor] = getBackgroundColors(best.current);
       const bg = ctx.createLinearGradient(0, 0, 0, HEIGHT);
       bg.addColorStop(0, topColor);
       bg.addColorStop(0.42, midColor);
@@ -655,40 +788,8 @@ function App() {
       ctx.fillStyle = bg;
       ctx.fillRect(0, 0, WIDTH, HEIGHT);
 
-      if (h < 1200) {
-        ctx.save();
-        ctx.globalAlpha = 0.22;
-        ctx.fillStyle = "#0f172a";
-        for (let i = 0; i < 7; i++) {
-          const x = 25 + i * 48;
-          const bh = 110 + (i % 3) * 38;
-          rounded(x, HEIGHT - 36 - bh, 28, bh, 8);
-        }
-        ctx.restore();
-      }
-      const cloudAlpha = clamp((h - 650) / 700, 0, 1) * (1 - clamp((h - 2700) / 900, 0, 1));
-      if (cloudAlpha > 0) {
-        for (let i = 0; i < 6; i++) {
-          const cx = (i * 80 + time.current * 0.5) % (WIDTH + 120) - 60;
-          const cy = (i * 90 - cameraY.current * 0.2) % HEIGHT;
-          ctx.fillStyle = `rgba(255,255,255,${0.48 * cloudAlpha})`;
-          ctx.beginPath();
-          ctx.arc(cx, cy, 22, 0, Math.PI * 2);
-          ctx.arc(cx + 20, cy + 6, 18, 0, Math.PI * 2);
-          ctx.arc(cx - 20, cy + 6, 18, 0, Math.PI * 2);
-          ctx.fill();
-        }
-      }
-      const dreamAlpha = clamp((h - 3500) / 1200, 0, 1);
-      if (dreamAlpha > 0) {
-        const aura = ctx.createRadialGradient(WIDTH / 2, HEIGHT / 2, 10, WIDTH / 2, HEIGHT / 2, 260);
-        aura.addColorStop(0, `rgba(244,114,182,${0.25 * dreamAlpha})`);
-        aura.addColorStop(1, "rgba(0,0,0,0)");
-        ctx.fillStyle = aura;
-        ctx.fillRect(0, 0, WIDTH, HEIGHT);
-      }
-      const starCount = 80 + Math.floor(clamp((h - 2400) / 1200, 0, 1) * 60);
-      for (let i = 0; i < starCount; i++) {
+      const cloudAlpha = clamp((best.current - 650) / 700, 0, 1) * (1 - clamp((best.current - 2700) / 900, 0, 1));
+      for (let i = 0; i < 80 + Math.floor(clamp((best.current - 2400) / 1200, 0, 1) * 60); i += 1) {
         const depth = 0.12 + (i % 5) * 0.07;
         const x = (i * 47) % WIDTH;
         const rawY = (i * 83 - cameraY.current * depth) % HEIGHT;
@@ -699,42 +800,59 @@ function App() {
         ctx.fill();
       }
 
-      platforms.current.forEach((pl) => {
-        const sy = pl.y - cameraY.current;
-        const colors = { green: ["#86efac", "#22c55e", "#14532d", "#4ade80"], gold: ["#fef3c7", "#facc15", "#92400e", "#fde047"], cyan: ["#cffafe", "#22d3ee", "#155e75", "#67e8f9"], violet: ["#f3e8ff", "#c084fc", "#6b21a8", "#d8b4fe"] }[pl.theme || "gold"];
-        ctx.save();
-        ctx.shadowColor = colors[3];
-        ctx.shadowBlur = 18;
-        const grad = ctx.createLinearGradient(pl.x, sy, pl.x, sy + 24);
-        grad.addColorStop(0, colors[0]);
-        grad.addColorStop(0.45, colors[1]);
-        grad.addColorStop(1, colors[2]);
+      if (cloudAlpha > 0) {
+        for (let i = 0; i < 6; i += 1) {
+          const x = (i * 80 + time.current * 0.5) % (WIDTH + 120) - 60;
+          const y = (i * 90 - cameraY.current * 0.2) % HEIGHT;
+          ctx.fillStyle = `rgba(255,255,255,${0.45 * cloudAlpha})`;
+          ctx.beginPath();
+          ctx.arc(x, y, 22, 0, Math.PI * 2);
+          ctx.arc(x + 20, y + 6, 18, 0, Math.PI * 2);
+          ctx.arc(x - 20, y + 6, 18, 0, Math.PI * 2);
+          ctx.fill();
+        }
+      }
+
+      platforms.current.forEach((platform) => {
+        const y = platform.y - cameraY.current;
+        const grad = ctx.createLinearGradient(platform.x, y, platform.x, y + 20);
+        grad.addColorStop(0, platform.ground ? "#86efac" : "#fef08a");
+        grad.addColorStop(1, platform.ground ? "#166534" : "#a16207");
         ctx.fillStyle = grad;
-        rounded(pl.x, sy, pl.w, pl.ground ? 22 : 16, 8);
-        ctx.restore();
+        ctx.shadowColor = platform.ground ? "#22c55e" : "#facc15";
+        ctx.shadowBlur = 12;
+        rounded(platform.x, y, platform.w, platform.ground ? 20 : 14, 7);
+        ctx.shadowBlur = 0;
       });
 
-      powerups.current.forEach((item) => {
-        const sy = item.y - cameraY.current + Math.sin(time.current * 0.12 + item.spin) * 5;
-        const meta = { shield: ["#67e8f9", "盾"], magnet: ["#f472b6", "磁"], slow: ["#a78bfa", "遅"], clear: ["#fb7185", "爆"], bonus: ["#facc15", "+"], upgrade: ["#facc15", "強"] }[item.type] || ["#facc15", "?"];
+      items.current.forEach((item) => {
+        const y = item.y - cameraY.current + Math.sin(time.current * 0.12 + item.spin) * 5;
+        const meta = {
+          shield: ["#67e8f9", "盾"],
+          magnet: ["#f472b6", "磁"],
+          slow: ["#a78bfa", "遅"],
+          clear: ["#fb7185", "爆"],
+          bonus: ["#facc15", "+"],
+          upgrade: ["#facc15", "強"],
+        }[item.type] || ["#facc15", "?"];
         ctx.save();
-        ctx.translate(item.x, sy);
+        ctx.translate(item.x, y);
         ctx.rotate(item.spin);
-        ctx.shadowBlur = 18;
-        ctx.shadowColor = meta[0];
         ctx.fillStyle = meta[0];
+        ctx.shadowColor = meta[0];
+        ctx.shadowBlur = 18;
         ctx.beginPath();
-        for (let i = 0; i < 8; i++) {
+        for (let i = 0; i < 8; i += 1) {
           const r = i % 2 === 0 ? 18 : 10;
           const a = -Math.PI / 2 + (Math.PI * 2 * i) / 8;
           const x = Math.cos(a) * r;
-          const y = Math.sin(a) * r;
-          if (i === 0) ctx.moveTo(x, y);
-          else ctx.lineTo(x, y);
+          const py = Math.sin(a) * r;
+          if (i === 0) ctx.moveTo(x, py);
+          else ctx.lineTo(x, py);
         }
         ctx.closePath();
         ctx.fill();
-        ctx.fillStyle = "rgba(15,23,42,0.78)";
+        ctx.fillStyle = "rgba(15,23,42,0.8)";
         ctx.beginPath();
         ctx.arc(0, 0, 9, 0, Math.PI * 2);
         ctx.fill();
@@ -746,110 +864,90 @@ function App() {
         ctx.restore();
       });
 
-      bullets.current.forEach((b) => {
-        const sy = b.y - cameraY.current;
-        ctx.fillStyle = b.kind === "orbit" ? "#4ade80" : "#fef08a";
+      bullets.current.forEach((bullet) => {
+        const y = bullet.y - cameraY.current;
+        ctx.fillStyle = bullet.kind === "orbit" ? "#4ade80" : "#fef08a";
         ctx.shadowColor = ctx.fillStyle;
         ctx.shadowBlur = 10;
         ctx.beginPath();
-        ctx.arc(b.x, sy, b.r || 3, 0, Math.PI * 2);
+        ctx.arc(bullet.x, y, bullet.r || 3, 0, Math.PI * 2);
+        ctx.fill();
+        ctx.shadowBlur = 0;
+      });
+
+      bossBullets.current.forEach((bullet) => {
+        const y = bullet.y - cameraY.current;
+        ctx.fillStyle = "#fb7185";
+        ctx.shadowColor = "#fb7185";
+        ctx.shadowBlur = 14;
+        ctx.beginPath();
+        ctx.arc(bullet.x, y, bullet.r || 4, 0, Math.PI * 2);
         ctx.fill();
         ctx.shadowBlur = 0;
       });
 
       enemies.current.forEach((enemy) => {
-        const sy = enemy.y - cameraY.current;
+        const y = enemy.y - cameraY.current;
         if (enemy.boss) {
-          ctx.save();
-          ctx.translate(enemy.x, sy);
           const phase2 = enemy.hp <= enemy.maxHp * 0.45;
-          const aura = ctx.createRadialGradient(0, 0, 10, 0, 0, phase2 ? 76 : 62);
-          aura.addColorStop(0, phase2 ? "rgba(244,114,182,0.48)" : "rgba(239,68,68,0.4)");
-          aura.addColorStop(1, "rgba(0,0,0,0)");
-          ctx.fillStyle = aura;
+          ctx.save();
+          ctx.translate(enemy.x, y);
+          ctx.fillStyle = enemy.type === "overlord" ? "#f97316" : phase2 ? "#ff4d6d" : "#ff3b3b";
+          ctx.shadowColor = ctx.fillStyle;
+          ctx.shadowBlur = 24;
           ctx.beginPath();
-          ctx.arc(0, 0, phase2 ? 76 : 62, 0, Math.PI * 2);
+          drawBossShape(enemy);
           ctx.fill();
-          ctx.fillStyle = "#0f172a";
-          ctx.shadowColor = phase2 ? "#f472b6" : "#ef4444";
-          ctx.shadowBlur = 26;
+          ctx.shadowBlur = 0;
+          ctx.fillStyle = "#000";
           ctx.beginPath();
-          for (let i = 0; i < 10; i++) {
-            const a = (Math.PI * 2 * i) / 10;
-            const r = (phase2 ? 32 : 28) + Math.sin(time.current * 0.15 + i) * 7;
-            const x = Math.cos(a) * r;
-            const y = Math.sin(a) * r;
-            if (i === 0) ctx.moveTo(x, y);
-            else ctx.lineTo(x, y);
-          }
-          ctx.closePath();
+          ctx.arc(-8, -4, 3, 0, Math.PI * 2);
+          ctx.arc(8, -4, 3, 0, Math.PI * 2);
           ctx.fill();
-          const core = ctx.createRadialGradient(0, 0, 2, 0, 0, 20);
-          core.addColorStop(0, phase2 ? "#f9a8d4" : "#f87171");
-          core.addColorStop(1, "#7f1d1d");
-          ctx.fillStyle = core;
-          ctx.beginPath();
-          ctx.arc(0, 0, 15, 0, Math.PI * 2);
-          ctx.fill();
-          ctx.fillStyle = "rgba(15,23,42,0.7)";
-          rounded(-32, -50, 64, 7, 3);
-          ctx.fillStyle = phase2 ? "#f472b6" : "#ef4444";
-          rounded(-32, -50, 64 * clamp(enemy.hp / enemy.maxHp, 0, 1), 7, 3);
+          ctx.fillStyle = "rgba(0,0,0,0.6)";
+          rounded(-30, -44, 60, 6, 3);
+          ctx.fillStyle = "#00ffcc";
+          rounded(-30, -44, 60 * clamp(enemy.hp / enemy.maxHp, 0, 1), 6, 3);
           ctx.restore();
           return;
         }
+        const colorMap = { seeker: "#ff4d6d", zigzag: "#ff7a00", swoop: "#00d4ff", patrol: "#a855f7" };
+        const color = colorMap[enemy.type] || "#ff3b3b";
         ctx.save();
-        ctx.translate(enemy.x + 14, sy + 12);
-        ctx.rotate(Math.sin(enemy.rot) * 0.18);
-        ctx.fillStyle = enemy.type === "seeker" ? "#7f1d1d" : "#581c87";
-        ctx.shadowColor = enemy.type === "seeker" ? "#f87171" : "#ef4444";
-        ctx.shadowBlur = 14;
-        const wing = Math.sin(time.current * 0.3 + enemy.rot) * 5;
+        ctx.translate(enemy.x + 14, y + 12);
+        ctx.fillStyle = color;
+        ctx.shadowColor = color;
+        ctx.shadowBlur = 12;
         ctx.beginPath();
-        ctx.moveTo(-9, -2);
-        ctx.quadraticCurveTo(-28, -17 - wing, -31, 6);
-        ctx.quadraticCurveTo(-20, 1, -10, 9);
+        drawEnemyShape(enemy);
         ctx.fill();
+        ctx.fillStyle = "#fff";
         ctx.beginPath();
-        ctx.moveTo(9, -2);
-        ctx.quadraticCurveTo(28, -17 + wing, 31, 6);
-        ctx.quadraticCurveTo(20, 1, 10, 9);
+        ctx.arc(-4, -2, 2, 0, Math.PI * 2);
+        ctx.arc(4, -2, 2, 0, Math.PI * 2);
         ctx.fill();
         ctx.restore();
       });
 
-      particles.current.forEach((pt) => {
-        const sy = pt.y - cameraY.current;
-        ctx.globalAlpha = Math.max(0, pt.life);
-        ctx.fillStyle = pt.color || "#fff";
+      particles.current.forEach((particle) => {
+        const y = particle.y - cameraY.current;
+        ctx.globalAlpha = Math.max(0, particle.life);
+        ctx.fillStyle = particle.color || "#fff";
         ctx.beginPath();
-        ctx.arc(pt.x, sy, pt.size || 2, 0, Math.PI * 2);
+        ctx.arc(particle.x, y, particle.size || 2, 0, Math.PI * 2);
         ctx.fill();
         ctx.globalAlpha = 1;
       });
 
-      const py = player.current.y - cameraY.current;
+      const heroY = player.current.y - cameraY.current;
       ctx.save();
-      ctx.translate(player.current.x, py + Math.sin(time.current * 0.12) * 2);
-      const facing = keys.current.left ? -1 : 1;
-      ctx.scale(facing, 1);
+      ctx.translate(player.current.x, heroY + Math.sin(time.current * 0.12) * 2);
       ctx.fillStyle = "#7c3aed";
       ctx.beginPath();
       ctx.moveTo(-6, 4);
-      ctx.quadraticCurveTo(-30, 16 + Math.sin(time.current * 0.2) * 3, -18, 34);
+      ctx.quadraticCurveTo(-30, 17, -18, 34);
       ctx.quadraticCurveTo(0, 25, 10, 8);
       ctx.closePath();
-      ctx.fill();
-      ctx.fillStyle = "#bae6fd";
-      ctx.beginPath();
-      ctx.moveTo(-13, -12);
-      ctx.lineTo(-8, -27);
-      ctx.lineTo(-2, -12);
-      ctx.fill();
-      ctx.beginPath();
-      ctx.moveTo(8, -12);
-      ctx.lineTo(14, -27);
-      ctx.lineTo(18, -10);
       ctx.fill();
       const body = ctx.createRadialGradient(0, -3, 2, 0, 0, 24);
       body.addColorStop(0, "#fff");
@@ -859,45 +957,40 @@ function App() {
       ctx.beginPath();
       ctx.ellipse(0, 0, 16, 19, 0, 0, Math.PI * 2);
       ctx.fill();
+      ctx.fillStyle = "#bae6fd";
+      ctx.beginPath();
+      ctx.moveTo(-13, -12);
+      ctx.lineTo(-8, -27);
+      ctx.lineTo(-2, -12);
+      ctx.moveTo(8, -12);
+      ctx.lineTo(14, -27);
+      ctx.lineTo(18, -10);
+      ctx.fill();
       ctx.fillStyle = "#facc15";
       rounded(-13, 7, 27, 5, 3);
       ctx.fillStyle = "#fef08a";
       ctx.beginPath();
       ctx.ellipse(-6, -4, 3.5, 2.5, 0, 0, Math.PI * 2);
-      ctx.fill();
-      ctx.beginPath();
       ctx.ellipse(7, -4, 3.5, 2.5, 0, 0, Math.PI * 2);
       ctx.fill();
-      [[powers.current.shield, "#67e8f9"], [powers.current.magnet, "#f472b6"], [powers.current.slow, "#a78bfa"]].filter(([v]) => v > 0).forEach(([, color], i) => {
-        ctx.strokeStyle = color;
-        ctx.lineWidth = 2;
-        ctx.beginPath();
-        ctx.arc(0, 0, 24 + i * 5, 0, Math.PI * 2);
-        ctx.stroke();
-      });
+      [[powers.current.shield, "#67e8f9"], [powers.current.magnet, "#f472b6"], [powers.current.slow, "#a78bfa"]]
+        .filter(([value]) => value > 0)
+        .forEach(([, color], index) => {
+          ctx.strokeStyle = color;
+          ctx.lineWidth = 2;
+          ctx.beginPath();
+          ctx.arc(0, 0, 24 + index * 5, 0, Math.PI * 2);
+          ctx.stroke();
+        });
       ctx.restore();
 
-      if (celebration.current.active) {
-        const c = celebration.current;
-        ctx.fillStyle = "rgba(15,23,42,0.68)";
-        rounded(74, 62, WIDTH - 148, 42, 14);
-        ctx.fillStyle = "#facc15";
-        ctx.font = "bold 13px system-ui";
-        ctx.textAlign = "center";
-        ctx.fillText(`BONUS ${c.height}m!`, WIDTH / 2, 80);
-        ctx.fillStyle = "#fff";
-        ctx.font = "bold 10px system-ui";
-        ctx.fillText("到達ボーナス", WIDTH / 2, 95);
-        ctx.textAlign = "left";
-      }
-
-      pickupTexts.current.forEach((t) => {
-        const sy = t.y - cameraY.current;
-        ctx.globalAlpha = Math.max(0, t.life);
-        ctx.fillStyle = t.color || "#fff";
+      floatingTexts.current.forEach((text) => {
+        const y = text.y - cameraY.current;
+        ctx.globalAlpha = Math.max(0, text.life);
+        ctx.fillStyle = text.color || "#fff";
         ctx.font = "bold 16px system-ui";
         ctx.textAlign = "center";
-        ctx.fillText(t.text, t.x, sy);
+        ctx.fillText(text.text, text.x, y);
         ctx.globalAlpha = 1;
         ctx.textAlign = "left";
       });
@@ -911,24 +1004,24 @@ function App() {
       ctx.font = "bold 10px system-ui";
       ctx.fillText(`R${weapon.current.rapid} S${weapon.current.spread} P${weapon.current.power} O${weapon.current.orbit}`, 25, 51);
 
-      const activeHud = [
+      const hud = [
         { label: "SHIELD", desc: "1回無敵", color: "#67e8f9", timer: powers.current.shield },
         { label: "MAGNET", desc: "吸い寄せ", color: "#f472b6", timer: powers.current.magnet },
         { label: "SLOW", desc: "敵減速", color: "#a78bfa", timer: powers.current.slow },
-      ].filter((p) => p.timer > 0);
-      activeHud.forEach((p, i) => {
+      ].filter((entry) => entry.timer > 0);
+      hud.forEach((entry, index) => {
         const x = 232;
-        const y = 12 + i * 46;
+        const y = 12 + index * 46;
         ctx.fillStyle = "rgba(15,23,42,0.54)";
         rounded(x, y, 112, 40, 13);
-        ctx.fillStyle = p.color;
+        ctx.fillStyle = entry.color;
         ctx.font = "bold 12px system-ui";
-        ctx.fillText(p.label, x + 13, y + 19);
+        ctx.fillText(entry.label, x + 13, y + 19);
         ctx.fillStyle = "white";
         ctx.font = "bold 10px system-ui";
-        ctx.fillText(`${Math.ceil(p.timer / 60)}s`, x + 13, y + 34);
+        ctx.fillText(`${Math.ceil(entry.timer / 60)}s`, x + 13, y + 34);
         ctx.fillStyle = "#cbd5f5";
-        ctx.fillText(p.desc, x + 55, y + 34);
+        ctx.fillText(entry.desc, x + 55, y + 34);
       });
 
       if (pausedRef.current) {
@@ -946,21 +1039,13 @@ function App() {
 
     const tick = () => {
       time.current += 1;
-      if (running.current && !isDead.current && !pausedRef.current) update();
-      else {
-        particles.current.forEach((pt) => {
-          pt.x += pt.vx;
-          pt.y += pt.vy;
-          pt.life -= 0.02;
-        });
-        particles.current = particles.current.filter((pt) => pt.life > 0);
-      }
+      if (running.current && !deadRef.current && !pausedRef.current) update();
       draw();
-      raf = requestAnimationFrame(tick);
+      raf = window.requestAnimationFrame(tick);
     };
 
     tick();
-    return () => cancelAnimationFrame(raf);
+    return () => window.cancelAnimationFrame(raf);
   }, [screen, playerName]);
 
   const touch = (side, isDown) => {
@@ -977,7 +1062,7 @@ function App() {
       <div style={styles.phoneCard}>
         {screen === "home" && (
           <div style={styles.menuScreen}>
-            <div style={styles.logoOrb}>✦</div>
+            <div style={styles.logoOrb}>?</div>
             <div style={styles.bigTitle}>SKY CLIMBER</div>
             <div style={styles.overlayText}>魔法猫を操作して、空の城を登れ。</div>
             <div style={styles.nameBox}>
@@ -986,11 +1071,11 @@ function App() {
                 style={styles.nameInput}
                 value={playerName}
                 maxLength={12}
-                onChange={(e) => {
-                  const next = e.target.value || "YOU";
-                  setPlayerName(next);
-                  saveName(next);
-                  setLeaderboard(makeMockLeaderboard(highScore, next));
+                onChange={(event) => {
+                  const nextName = event.target.value || "YOU";
+                  setPlayerName(nextName);
+                  safeSet(NAME_KEY, nextName);
+                  setLeaderboard(makeLeaderboard(highScoreRef.current, nextName));
                 }}
               />
             </div>
@@ -1040,7 +1125,7 @@ function App() {
               <button style={styles.miniButton} onClick={openLeaderboard}>ランキング</button>
             </div>
             <div style={styles.stage}>
-              <canvas ref={canvasRef} width={WIDTH} height={HEIGHT} style={styles.canvas} onContextMenu={(e) => e.preventDefault()} />
+              <canvas ref={canvasRef} width={WIDTH} height={HEIGHT} style={styles.canvas} onContextMenu={(event) => event.preventDefault()} />
               {!started && (
                 <div style={styles.overlay}>
                   <div style={styles.bigTitle}>SKY CLIMBER</div>
@@ -1058,8 +1143,8 @@ function App() {
               )}
             </div>
             <div style={styles.controls} onPointerLeave={stopTouch} onPointerCancel={stopTouch}>
-              <button style={styles.controlButton} onPointerDown={(e) => { e.preventDefault(); touch("left", true); }} onPointerUp={(e) => { e.preventDefault(); touch("left", false); }} onPointerCancel={() => touch("left", false)} onPointerLeave={() => touch("left", false)}>←</button>
-              <button style={styles.controlButton} onPointerDown={(e) => { e.preventDefault(); touch("right", true); }} onPointerUp={(e) => { e.preventDefault(); touch("right", false); }} onPointerCancel={() => touch("right", false)} onPointerLeave={() => touch("right", false)}>→</button>
+              <button style={styles.controlButton} onPointerDown={(event) => { event.preventDefault(); touch("left", true); }} onPointerUp={(event) => { event.preventDefault(); touch("left", false); }} onPointerCancel={() => touch("left", false)} onPointerLeave={() => touch("left", false)}>←</button>
+              <button style={styles.controlButton} onPointerDown={(event) => { event.preventDefault(); touch("right", true); }} onPointerUp={(event) => { event.preventDefault(); touch("right", false); }} onPointerCancel={() => touch("right", false)} onPointerLeave={() => touch("right", false)}>→</button>
             </div>
             <div style={styles.help}>PC：←/→ または A/D、スペースで一時停止</div>
           </>
@@ -1111,8 +1196,3 @@ const styles = {
   topActions: { display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: 6, marginBottom: 8 },
   miniButton: { border: "1px solid rgba(216,180,254,0.35)", borderRadius: 12, padding: "8px 6px", color: "white", background: "rgba(15,23,42,0.65)", fontWeight: 800, fontSize: 12, cursor: "pointer" },
 };
-
-  ReactDOM.createRoot(document.getElementById("root")).render(<App />);
-  </script>
-</body>
-</html>
