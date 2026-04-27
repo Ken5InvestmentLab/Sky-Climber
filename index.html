@@ -1,4 +1,17 @@
-import React, { useEffect, useRef, useState } from "react";
+<!doctype html>
+<html lang="ja">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Sky Climer</title>
+</head>
+<body>
+  <div id="root"></div>
+  <script crossorigin src="https://unpkg.com/react@18/umd/react.development.js"></script>
+  <script crossorigin src="https://unpkg.com/react-dom@18/umd/react-dom.development.js"></script>
+  <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+  <script type="text/babel">
+const { useEffect, useRef, useState } = React;
 
 const WIDTH = 360;
 const HEIGHT = 640;
@@ -151,7 +164,7 @@ function findReachablePowerupSpot(platforms, playerY, fallbackX) {
   return { x: clamp(platform.x + platform.w / 2, 42, WIDTH - 42), y: platform.y - 34 };
 }
 
-export default function App() {
+function App() {
   const canvasRef = useRef(null);
   const keys = useRef({ left: false, right: false });
   const player = useRef({ x: WIDTH / 2, y: HEIGHT - 120, vx: 0, vy: 0, r: 15 });
@@ -1099,3 +1112,8 @@ const styles = {
   topActions: { display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: 6, marginBottom: 8 },
   miniButton: { border: "1px solid rgba(216,180,254,0.35)", borderRadius: 12, padding: "8px 6px", color: "white", background: "rgba(15,23,42,0.65)", fontWeight: 800, fontSize: 12, cursor: "pointer" },
 };
+
+  ReactDOM.createRoot(document.getElementById("root")).render(<App />);
+  </script>
+</body>
+</html>
