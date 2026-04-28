@@ -9,7 +9,8 @@ const POWERUP_DURATION = 720;
 const JUMP_UPGRADE_AMOUNT = 0.9;
 const MAX_JUMP_UPGRADES = 4;
 const JUMP_UPGRADE_BOSS_RANK = 2;
-const PHASE_SHIELD_BOSS_RANK = 3;
+const SECOND_JUMP_UPGRADE_BOSS_RANK = 3;
+const PHASE_SHIELD_BOSS_RANK = 4;
 const LASER_BOSS_RANK = 4;
 const ALL_UPGRADE_BOSS_RANK = 5;
 const AUTO_SPECIAL_REWARD_MIN_RANK = 6;
@@ -290,11 +291,16 @@ function isPhaseShieldActive(timer = 0, frame = 0) {
 
 function getBossRewardDrops(rank) {
   const drops = [];
-  if (rank === JUMP_UPGRADE_BOSS_RANK) drops.push({ type: "jump" });
-  if (rank === PHASE_SHIELD_BOSS_RANK) drops.push({ type: "phaseShield", duration: PHASE_SHIELD_DURATION });
+  if (rank === JUMP_UPGRADE_BOSS_RANK || rank === SECOND_JUMP_UPGRADE_BOSS_RANK) drops.push({ type: "jump" });
   if (rank === LASER_BOSS_RANK) drops.push({ type: "laser", amount: LASER_BOSS_DROP_AMOUNT });
   if (rank >= ALL_UPGRADE_BOSS_RANK) drops.push({ type: "allUpgrade" });
   return drops;
+}
+
+function getBossIntroDrops(rank) {
+  return rank === PHASE_SHIELD_BOSS_RANK
+    ? [{ type: "phaseShield", duration: PHASE_SHIELD_DURATION }]
+    : [];
 }
 
 function getBossAutoReward(rank, roll = Math.random()) {
@@ -327,7 +333,8 @@ function runSelfTests() {
   console.assert(getBossRank(3000) === JUMP_UPGRADE_BOSS_RANK, "3000m boss should be the jump-upgrade drop boss");
   console.assert(getJumpVelocity(1) < getJumpVelocity(0), "jump upgrades should increase launch power");
   console.assert(isPhaseShieldActive(10, 0) && !isPhaseShieldActive(10, PHASE_SHIELD_ACTIVE_FRAMES), "phase shield should blink on and off");
-  console.assert(getBossRewardDrops(getBossRank(4000)).some((drop) => drop.type === "phaseShield"), "4000m boss should drop phase shield");
+  console.assert(getBossRewardDrops(getBossRank(4000)).some((drop) => drop.type === "jump"), "4000m boss should also drop a jump upgrade");
+  console.assert(getBossIntroDrops(getBossRank(5000)).some((drop) => drop.type === "phaseShield"), "5000m boss should drop phase shield at battle start");
   console.assert(getBossRewardDrops(getBossRank(5000)).some((drop) => drop.type === "laser" && drop.amount === 2), "5000m boss should drop two lasers");
   console.assert(getBossRewardDrops(getBossRank(6000)).some((drop) => drop.type === "allUpgrade"), "6000m+ bosses should drop all-weapon upgrades");
   console.assert(getBossAutoReward(getBossRank(7000), 0.04).type === "jump", "7000m+ auto rewards can include rare jump upgrades");
@@ -726,6 +733,24 @@ export default function App() {
       });
     };
 
+    const dropBossItems = (dropItems, x, y, arena, spread = 0.18) => {
+      dropItems.forEach((drop, index) => {
+        const offset = index - (dropItems.length - 1) / 2;
+        items.current.push({
+          x: clamp(x + (Math.random() - 0.5) * 10, 36, WIDTH - 36),
+          y,
+          vx: offset * spread + (Math.random() - 0.5) * 0.34,
+          vy: 0.4 + Math.random() * 0.6,
+          drop: true,
+          settleY: arena ? arena.floorY - BOSS_DROP_SETTLE_OFFSET : y + 120 + Math.random() * 80,
+          type: drop.type,
+          amount: drop.amount,
+          duration: drop.duration,
+          spin: Math.random() * Math.PI,
+        });
+      });
+    };
+
     const spawnBoss = () => {
       const form = getBossForm(best.current);
       const rank = getBossRank(best.current);
@@ -762,6 +787,11 @@ export default function App() {
         attackDelay: Math.max(80, 150 - rank * 5),
         shotTimer: Math.max(52, 125 - rank * 4),
       });
+      const introDrops = getBossIntroDrops(rank);
+      if (introDrops.length > 0) {
+        dropBossItems(introDrops, WIDTH / 2, arenaCameraY + 94, bossArena.current, 0);
+        addText("PHASE SHIELD DROP", WIDTH / 2, cameraY.current + 154, form.accent);
+      }
       addText(`${form.name} Lv.${rank + 1}${cycle > 0 ? `+${cycle}` : ""}`, WIDTH / 2, cameraY.current + 120, form.accent);
     };
 
@@ -1040,21 +1070,7 @@ export default function App() {
                   const isUpgrade = i === 0 || Math.random() < 0.45;
                   dropItems.push({ type: isUpgrade ? "upgrade" : POWER_TYPES[Math.floor(Math.random() * POWER_TYPES.length)] });
                 }
-                dropItems.forEach((drop, index) => {
-                  const offset = index - (dropItems.length - 1) / 2;
-                  items.current.push({
-                    x: clamp(enemy.x + (Math.random() - 0.5) * 10, 36, WIDTH - 36),
-                    y: enemy.y,
-                    vx: offset * 0.18 + (Math.random() - 0.5) * 0.34,
-                    vy: 0.4 + Math.random() * 0.6,
-                    drop: true,
-                    settleY: arena ? arena.floorY - BOSS_DROP_SETTLE_OFFSET : enemy.y + 120 + Math.random() * 80,
-                    type: drop.type,
-                    amount: drop.amount,
-                    duration: drop.duration,
-                    spin: Math.random() * Math.PI,
-                  });
-                });
+                dropBossItems(dropItems, enemy.x, enemy.y, arena);
 
                 fadeBossBullets();
                 applyBossReward(getBossAutoReward(enemy.rank), { auto: true });
