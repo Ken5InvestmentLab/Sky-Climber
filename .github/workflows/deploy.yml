@@ -2,8 +2,7 @@ name: Deploy to GitHub Pages
 
 on:
   push:
-    branches: [main, work]
-  workflow_dispatch:
+
 
 permissions:
   contents: read
@@ -27,28 +26,12 @@ jobs:
         with:
           node-version: 20
 
-      - name: Install
-        run: |
-          if [ -f package-lock.json ]; then
-            npm ci
-          else
-            npm install
-          fi
 
-      - name: Build
-        run: npm run build -- --outDir dist
-        env:
-          GITHUB_REPOSITORY: ${{ github.repository }}
-
-      - name: Verify build output
-        run: |
-          test -d dist
-          test -f dist/index.html
 
       - name: Upload artifact
         uses: actions/upload-pages-artifact@v4
         with:
-          path: dist
+
 
   deploy:
     environment:
