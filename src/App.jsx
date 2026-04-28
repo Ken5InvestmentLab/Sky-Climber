@@ -8,6 +8,7 @@ const MOVE_SPEED = 4.2;
 const POWERUP_DURATION = 720;
 const BOSS_INTRO_DURATION = 96;
 const BOSS_FLOOR_INTRO_DROP = 46;
+const BOSS_EXIT_PLATFORM_DELAY = 105;
 const STORAGE_KEY = "sky-climber-high-score";
 const NAME_KEY = "sky-climber-player-name";
 const PLAYER_ID_KEY = "sky-climber-player-id";
@@ -591,8 +592,12 @@ export default function App() {
     const clearBossArena = () => {
       if (!bossArena.current) return;
       const arena = bossArena.current;
-      platforms.current = makeArenaExitPlatforms(arena);
-      bossArena.current = null;
+      platforms.current = [];
+      bossArena.current = {
+        ...arena,
+        clearing: true,
+        exitDelay: BOSS_EXIT_PLATFORM_DELAY,
+      };
       addText("ROUTE OPEN", WIDTH / 2, cameraY.current + 150, "#facc15");
     };
 
@@ -798,14 +803,14 @@ export default function App() {
         bossAlive = true;
       }
 
-      if (bossAlive && bossArena.current) {
+      if (bossArena.current) {
         const arena = bossArena.current;
         const introDuration = arena.introDuration || BOSS_INTRO_DURATION;
         arena.intro = Math.max(0, arena.intro || 0);
-        if (arena.intro > 0) arena.intro -= 1;
+        if (!arena.clearing && arena.intro > 0) arena.intro -= 1;
         const introProgress = clamp(1 - arena.intro / introDuration, 0, 1);
 
-        if (arena.intro <= 0 && !arena.platformsCleared) {
+        if (!arena.clearing && arena.intro <= 0 && !arena.platformsCleared) {
           platforms.current = [];
           arena.platformsCleared = true;
         }
@@ -821,9 +826,18 @@ export default function App() {
           p.vy = Math.max(1.8, Math.abs(p.vy) * 0.28);
           addBurst(p.x, arena.ceilingY, 6, "#fb7185");
         }
+
+        if (arena.clearing) {
+          arena.exitDelay = Math.max(0, (arena.exitDelay || 0) - 1);
+          if (arena.exitDelay <= 0) {
+            platforms.current = makeArenaExitPlatforms(arena);
+            bossArena.current = null;
+          }
+        }
       }
 
       const bossIntroActive = bossAlive && bossArena.current && (bossArena.current.intro || 0) > 0;
+      const bossExitActive = !bossAlive && bossArena.current?.clearing;
 
       if (!bossAlive) platforms.current.forEach((platform) => {
         const previousY = p.y - p.vy;
@@ -835,23 +849,23 @@ export default function App() {
         }
       });
 
-      const maxEnemies = bossAlive
+      const maxEnemies = bossAlive || bossExitActive
         ? Math.floor(5 + chaos * 3 + Math.min(24, threat * 3.8))
         : Math.floor(3 + chaos * 16 + Math.min(56, threat * 8.2));
-      const spawnRate = bossAlive
+      const spawnRate = bossAlive || bossExitActive
         ? 0.002 + chaos * 0.006 + Math.min(0.04, threat * 0.0045)
         : 0.002 + chaos * 0.016 + Math.min(0.08, threat * 0.0075);
-      if (!bossIntroActive && enemies.current.filter((enemy) => !enemy.boss).length < maxEnemies && Math.random() < spawnRate) {
+      if (!bossIntroActive && !bossExitActive && enemies.current.filter((enemy) => !enemy.boss).length < maxEnemies && Math.random() < spawnRate) {
         spawnEnemy();
       }
 
       const powerRate = 0.0007 + difficulty * 0.0004;
       const upgradeRate = 0.00035 + difficulty * 0.0003;
-      if (!bossAlive && items.current.length < 2 && Math.random() < powerRate) {
+      if (!bossAlive && !bossExitActive && items.current.length < 2 && Math.random() < powerRate) {
         const spot = findReachableSpot(platforms.current, p.y, p.x);
         items.current.push({ x: spot.x, y: spot.y, type: POWER_TYPES[Math.floor(Math.random() * POWER_TYPES.length)], spin: 0 });
       }
-      if (!bossAlive && items.current.length < 2 && Math.random() < upgradeRate) {
+      if (!bossAlive && !bossExitActive && items.current.length < 2 && Math.random() < upgradeRate) {
         const spot = findReachableSpot(platforms.current, p.y, p.x);
         items.current.push({ x: spot.x, y: spot.y, type: "upgrade", spin: 0 });
       }
