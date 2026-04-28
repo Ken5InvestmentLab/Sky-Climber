@@ -6,6 +6,7 @@ const GRAVITY = 0.42;
 const JUMP = -9.4;
 const MOVE_SPEED = 4.2;
 const POWERUP_DURATION = 720;
+const BOSS_INTRO_DURATION = 96;
 const STORAGE_KEY = "sky-climber-high-score";
 const NAME_KEY = "sky-climber-player-name";
 const PLAYER_ID_KEY = "sky-climber-player-id";
@@ -65,6 +66,20 @@ function normalizePlayerName(name) {
   return (name || "").trim().slice(0, 12) || "YOU";
 }
 
+function makeDefaultPlayerName(playerId = "") {
+  const compact = (playerId || "").replace(/[^a-z0-9]/gi, "");
+  const suffix = compact.slice(-5).toUpperCase();
+  return `SKY${suffix || Math.floor(1000 + Math.random() * 9000)}`;
+}
+
+function getInitialPlayerName(playerId) {
+  const saved = safeGet(NAME_KEY, "");
+  if (saved && saved.trim()) return normalizePlayerName(saved);
+  const generated = makeDefaultPlayerName(playerId);
+  safeSet(NAME_KEY, generated);
+  return generated;
+}
+
 function getPlayerId() {
   const existing = safeGet(PLAYER_ID_KEY, "");
   if (existing) return existing;
@@ -100,7 +115,7 @@ function getNextMonthlyResetText(date = new Date()) {
   return `${nextYear}年${nextMonth}月1日 00:00 JST`;
 }
 
-function makeLeaderboard(rows, myScore, myName, playerId = "me") {
+function makeLeaderboard(rows, myScore, myName, playerId = "me", includeCurrent = true) {
   const entries = new Map();
   rows.forEach((row) => {
     const id = row.player_id || row.id || `${row.name}-${row.score}`;
@@ -113,14 +128,16 @@ function makeLeaderboard(rows, myScore, myName, playerId = "me") {
     });
   });
 
-  const displayName = normalizePlayerName(myName);
-  const current = entries.get(playerId);
-  entries.set(playerId, {
-    id: playerId,
-    name: displayName,
-    score: Math.max(Number(myScore) || 0, current?.score || 0),
-    me: true,
-  });
+  if (includeCurrent) {
+    const displayName = normalizePlayerName(myName);
+    const current = entries.get(playerId);
+    entries.set(playerId, {
+      id: playerId,
+      name: displayName,
+      score: Math.max(Number(myScore) || 0, current?.score || 0),
+      me: true,
+    });
+  }
 
   return [...entries.values()]
     .sort((a, b) => b.score - a.score)
@@ -238,7 +255,7 @@ function getBossHp(score) {
   const rank = getBossRank(score);
   const cycle = getBossCycle(score);
   const threat = getThreat(score);
-  return Math.floor(170 + rank * 105 + rank * rank * 24 + cycle * 420 + threat * 165);
+  return Math.floor(420 + rank * 190 + rank * rank * 52 + cycle * 760 + threat * 310);
 }
 
 function runSelfTests() {
@@ -258,6 +275,7 @@ function runSelfTests() {
   console.assert(getBossType(3000) === "void", "higher bosses should change type");
   console.assert(getBossType(5000) === "eclipse", "boss roster should keep expanding past 4000m");
   console.assert(getBossHp(3000) > getBossHp(1000), "boss HP should scale upward");
+  console.assert(makeDefaultPlayerName("player-abc123").startsWith("SKY"), "default player names should avoid shared YOU");
 }
 
 export default function App() {
@@ -293,10 +311,11 @@ export default function App() {
   const [dead, setDead] = useState(false);
   const [paused, setPaused] = useState(false);
   const [started, setStarted] = useState(false);
-  const [playerName, setPlayerName] = useState(() => safeGet(NAME_KEY, "YOU") || "YOU");
-  const [leaderboard, setLeaderboard] = useState(() => makeLeaderboard([], highScoreRef.current, safeGet(NAME_KEY, "YOU"), playerIdRef.current));
+  const [playerName, setPlayerName] = useState(() => getInitialPlayerName(playerIdRef.current));
+  const [leaderboard, setLeaderboard] = useState(() => makeLeaderboard([], highScoreRef.current, getInitialPlayerName(playerIdRef.current), playerIdRef.current));
   const [leaderboardStatus, setLeaderboardStatus] = useState(ONLINE_LEADERBOARD_ENABLED ? "loading" : "local");
   const [leaderboardError, setLeaderboardError] = useState("");
+  const [nameLocked, setNameLocked] = useState(false);
 
   const leaderboardMonth = getMonthLabel();
   const leaderboardReset = getNextMonthlyResetText();
@@ -319,7 +338,8 @@ export default function App() {
     }
   };
 
-  const refreshLeaderboard = async (scoreToSave = null, nameOverride = playerName) => {
+  const refreshLeaderboard = async (scoreToSave = null, nameOverride = playerName, options = {}) => {
+    const { checkName = scoreToSave != null } = options;
     const displayName = normalizePlayerName(nameOverride);
     const localScore = Math.max(highScoreRef.current, Number(scoreToSave) || 0);
     const playerId = playerIdRef.current;
@@ -328,6 +348,7 @@ export default function App() {
       setLeaderboard(makeLeaderboard([], localScore, displayName, playerId));
       setLeaderboardStatus("local");
       setLeaderboardError("");
+      setNameLocked(false);
       return;
     }
 
@@ -341,6 +362,41 @@ export default function App() {
     try {
       setLeaderboardStatus("loading");
       setLeaderboardError("");
+
+      const loadRows = async () => {
+        const params = new URLSearchParams({
+          select: "player_id,name,score,updated_at",
+          month_key: `eq.${monthKey}`,
+          order: "score.desc",
+          limit: "100",
+        });
+        const response = await fetch(`${SUPABASE_URL}/rest/v1/${LEADERBOARD_TABLE}?${params}`, { headers });
+        if (!response.ok) throw new Error(`leaderboard ${response.status}`);
+        return response.json();
+      };
+
+      if (checkName) {
+        const nameParams = new URLSearchParams({
+          select: "player_id,name",
+          month_key: `eq.${monthKey}`,
+          name: `eq.${displayName}`,
+          player_id: `neq.${playerId}`,
+          limit: "1",
+        });
+        const nameResponse = await fetch(`${SUPABASE_URL}/rest/v1/${LEADERBOARD_TABLE}?${nameParams}`, { headers });
+        if (!nameResponse.ok) throw new Error(`name ${nameResponse.status}`);
+        const nameRows = await nameResponse.json();
+        if (nameRows.length > 0) {
+          const rows = await loadRows();
+          setLeaderboard(makeLeaderboard(rows, localScore, displayName, playerId, false));
+          setLeaderboardStatus("name-taken");
+          setLeaderboardError(`「${displayName}」は今月すでに使われています。別の名前にしてください。`);
+          setNameLocked(true);
+          return;
+        }
+      }
+
+      setNameLocked(false);
 
       if (scoreToSave != null) {
         const submitResponse = await fetch(`${SUPABASE_URL}/rest/v1/${LEADERBOARD_TABLE}?on_conflict=month_key,player_id`, {
@@ -356,24 +412,28 @@ export default function App() {
             score: localScore,
           }]),
         });
-        if (!submitResponse.ok) throw new Error(`submit ${submitResponse.status}`);
+        if (!submitResponse.ok) {
+          const body = await submitResponse.text();
+          if (submitResponse.status === 409 || body.includes("duplicate key")) {
+            const rows = await loadRows();
+            setLeaderboard(makeLeaderboard(rows, localScore, displayName, playerId, false));
+            setLeaderboardStatus("name-taken");
+            setLeaderboardError(`「${displayName}」は今月すでに使われています。別の名前にしてください。`);
+            setNameLocked(true);
+            return;
+          }
+          throw new Error(`submit ${submitResponse.status}`);
+        }
       }
 
-      const params = new URLSearchParams({
-        select: "player_id,name,score,updated_at",
-        month_key: `eq.${monthKey}`,
-        order: "score.desc",
-        limit: "100",
-      });
-      const response = await fetch(`${SUPABASE_URL}/rest/v1/${LEADERBOARD_TABLE}?${params}`, { headers });
-      if (!response.ok) throw new Error(`leaderboard ${response.status}`);
-      const rows = await response.json();
+      const rows = await loadRows();
       setLeaderboard(makeLeaderboard(rows, localScore, displayName, playerId));
       setLeaderboardStatus("online");
     } catch (error) {
       setLeaderboard(makeLeaderboard([], localScore, displayName, playerId));
       setLeaderboardStatus("error");
       setLeaderboardError("オンラインランキングを読み込めませんでした");
+      setNameLocked(false);
     }
   };
 
@@ -547,8 +607,10 @@ export default function App() {
         cameraY: arenaCameraY,
         ceilingY: arenaCameraY + 72,
         floorY: arenaCameraY + HEIGHT - 44,
+        intro: BOSS_INTRO_DURATION,
+        introDuration: BOSS_INTRO_DURATION,
+        platformsCleared: false,
       };
-      platforms.current = [];
       bossBullets.current = [];
       enemies.current.push({
         boss: true,
@@ -558,7 +620,7 @@ export default function App() {
         cycle,
         threat,
         x: WIDTH / 2,
-        y: cameraY.current + 84,
+        y: arenaCameraY - 92,
         vx: 0,
         vy: 0,
         hp,
@@ -732,21 +794,40 @@ export default function App() {
       if (p.x < -p.r) p.x = WIDTH + p.r;
       if (p.x > WIDTH + p.r) p.x = -p.r;
 
+      if (!bossAlive && best.current >= nextBoss.current) {
+        spawnBoss();
+        nextBoss.current += 1000;
+        bossAlive = true;
+      }
+
       if (bossAlive && bossArena.current) {
         const arena = bossArena.current;
-        if (p.y + p.r >= arena.floorY) {
-          p.y = arena.floorY - p.r;
-          p.vy = JUMP * 0.88;
-          addBurst(p.x, arena.floorY, 6, "#38bdf8");
+        const introDuration = arena.introDuration || BOSS_INTRO_DURATION;
+        arena.intro = Math.max(0, arena.intro || 0);
+        if (arena.intro > 0) arena.intro -= 1;
+        const introProgress = clamp(1 - arena.intro / introDuration, 0, 1);
+
+        if (arena.intro <= 0 && !arena.platformsCleared) {
+          platforms.current = [];
+          arena.platformsCleared = true;
         }
-        if (p.y - p.r < arena.ceilingY) {
+
+        const floorY = arena.floorY + (1 - introProgress) * 92;
+        if (introProgress > 0.2 && p.y + p.r >= floorY) {
+          p.y = floorY - p.r;
+          p.vy = JUMP * 0.88;
+          addBurst(p.x, floorY, 6, "#38bdf8");
+        }
+        if (introProgress > 0.55 && p.y - p.r < arena.ceilingY) {
           p.y = arena.ceilingY + p.r;
           p.vy = Math.max(1.8, Math.abs(p.vy) * 0.28);
           addBurst(p.x, arena.ceilingY, 6, "#fb7185");
         }
       }
 
-      if (!bossAlive) platforms.current.forEach((platform) => {
+      const bossIntroActive = bossAlive && bossArena.current && (bossArena.current.intro || 0) > 0;
+
+      if (!bossAlive || bossIntroActive) platforms.current.forEach((platform) => {
         const previousY = p.y - p.vy;
         const landed = p.vy > 0 && previousY + p.r <= platform.y && p.y + p.r >= platform.y;
         const withinX = p.x > platform.x - p.r && p.x < platform.x + platform.w + p.r;
@@ -756,19 +837,13 @@ export default function App() {
         }
       });
 
-      if (!bossAlive && best.current >= nextBoss.current) {
-        spawnBoss();
-        nextBoss.current += 1000;
-        bossAlive = true;
-      }
-
       const maxEnemies = bossAlive
         ? Math.floor(5 + chaos * 3 + Math.min(24, threat * 3.8))
         : Math.floor(3 + chaos * 16 + Math.min(56, threat * 8.2));
       const spawnRate = bossAlive
         ? 0.002 + chaos * 0.006 + Math.min(0.04, threat * 0.0045)
         : 0.002 + chaos * 0.016 + Math.min(0.08, threat * 0.0075);
-      if (enemies.current.filter((enemy) => !enemy.boss).length < maxEnemies && Math.random() < spawnRate) {
+      if (!bossIntroActive && enemies.current.filter((enemy) => !enemy.boss).length < maxEnemies && Math.random() < spawnRate) {
         spawnEnemy();
       }
 
@@ -792,6 +867,7 @@ export default function App() {
           const ey = enemy.boss ? enemy.y : enemy.y + enemySize / 2;
           const range = enemy.boss ? 38 * (enemy.scale || 1) : enemySize * 0.78;
           if (Math.abs(bullet.x - ex) < range && Math.abs(bullet.y - ey) < range) {
+            if (enemy.boss && (bossArena.current?.intro || 0) > 0) return;
             bullet.hit = true;
             if (enemy.boss) {
               enemy.hp -= bullet.damage || 1;
@@ -838,6 +914,19 @@ export default function App() {
           const rank = enemy.rank ?? getBossRank(best.current);
           const threat = enemy.threat ?? getThreat(best.current);
           const form = enemy.form || getBossFormByType(enemy.type);
+          const arena = bossArena.current;
+          if (arena && (arena.intro || 0) > 0) {
+            const introDuration = arena.introDuration || BOSS_INTRO_DURATION;
+            const introProgress = clamp(1 - (arena.intro || 0) / introDuration, 0, 1);
+            const easedIntro = introProgress * introProgress * (3 - 2 * introProgress);
+            const targetIntroY = arena.cameraY + 84;
+            const startIntroY = arena.cameraY - 92;
+            enemy.x += (WIDTH / 2 - enemy.x) * 0.1;
+            enemy.y = startIntroY + (targetIntroY - startIntroY) * easedIntro;
+            enemy.vx *= 0.6;
+            enemy.vy = 0;
+            return;
+          }
           const targetX = p.x;
           const targetY = cameraY.current + (phase2 ? 96 : 82) + Math.sin(enemy.t * 0.035) * (18 + Math.min(16, threat * 2));
           const dx = targetX - enemy.x;
@@ -1250,19 +1339,29 @@ export default function App() {
         }
       }
 
+      let platformAlpha = 1;
       if (bossArena.current) {
         const arena = bossArena.current;
-        const floorY = arena.floorY - cameraY.current;
-        const ceilingY = arena.ceilingY - cameraY.current;
+        const introDuration = arena.introDuration || BOSS_INTRO_DURATION;
+        const introProgress = clamp(1 - (arena.intro || 0) / introDuration, 0, 1);
+        const easedIntro = introProgress * introProgress * (3 - 2 * introProgress);
+        platformAlpha = arena.platformsCleared ? 0 : clamp((arena.intro || 0) / introDuration, 0, 1);
+        const floorY = arena.floorY - cameraY.current + (1 - easedIntro) * 64;
+        const ceilingY = arena.ceilingY - cameraY.current - (1 - easedIntro) * 24;
         const floorGrad = ctx.createLinearGradient(0, floorY - 18, 0, floorY + 22);
         floorGrad.addColorStop(0, "rgba(56,189,248,0.35)");
         floorGrad.addColorStop(1, "rgba(15,23,42,0.95)");
+        ctx.save();
+        ctx.globalAlpha = 0.16 + easedIntro * 0.84;
         ctx.fillStyle = floorGrad;
         ctx.shadowColor = "#38bdf8";
-        ctx.shadowBlur = 22;
+        ctx.shadowBlur = 10 + easedIntro * 18;
         rounded(0, floorY, WIDTH, 24, 0);
         ctx.shadowBlur = 0;
+        ctx.restore();
 
+        ctx.save();
+        ctx.globalAlpha = clamp((easedIntro - 0.22) / 0.78, 0, 1);
         ctx.strokeStyle = "rgba(251,113,133,0.9)";
         ctx.lineWidth = 4;
         ctx.setLineDash([12, 8]);
@@ -1279,19 +1378,25 @@ export default function App() {
         ctx.stroke();
         ctx.fillStyle = "rgba(254,242,242,0.82)";
         rounded(WIDTH / 2 - 11, ceilingY + 20, 22, 15, 4);
+        ctx.restore();
       }
 
-      platforms.current.forEach((platform) => {
-        const y = platform.y - cameraY.current;
-        const grad = ctx.createLinearGradient(platform.x, y, platform.x, y + 20);
-        grad.addColorStop(0, platform.ground ? "#86efac" : "#fef08a");
-        grad.addColorStop(1, platform.ground ? "#166534" : "#a16207");
-        ctx.fillStyle = grad;
-        ctx.shadowColor = platform.ground ? "#22c55e" : "#facc15";
-        ctx.shadowBlur = 12;
-        rounded(platform.x, y, platform.w, platform.ground ? 20 : 14, 7);
-        ctx.shadowBlur = 0;
-      });
+      if (platformAlpha > 0.01) {
+        ctx.save();
+        ctx.globalAlpha = platformAlpha;
+        platforms.current.forEach((platform) => {
+          const y = platform.y - cameraY.current;
+          const grad = ctx.createLinearGradient(platform.x, y, platform.x, y + 20);
+          grad.addColorStop(0, platform.ground ? "#86efac" : "#fef08a");
+          grad.addColorStop(1, platform.ground ? "#166534" : "#a16207");
+          ctx.fillStyle = grad;
+          ctx.shadowColor = platform.ground ? "#22c55e" : "#facc15";
+          ctx.shadowBlur = 12;
+          rounded(platform.x, y, platform.w, platform.ground ? 20 : 14, 7);
+          ctx.shadowBlur = 0;
+        });
+        ctx.restore();
+      }
 
       items.current.forEach((item) => {
         const y = item.y - cameraY.current + Math.sin(time.current * 0.12 + item.spin) * 5;
@@ -1586,22 +1691,28 @@ export default function App() {
             <div style={styles.nameBox}>
               <label style={styles.nameLabel}>PLAYER NAME</label>
               <input
-                style={styles.nameInput}
+                style={{ ...styles.nameInput, ...(nameLocked ? styles.nameInputError : {}) }}
                 value={playerName}
                 maxLength={12}
                 onChange={(event) => {
                   const nextName = event.target.value;
+                  setNameLocked(false);
+                  setLeaderboardError("");
                   setPlayerName(nextName);
                   safeSet(NAME_KEY, nextName);
                   setLeaderboard(makeLeaderboard([], highScoreRef.current, nextName, playerIdRef.current));
                 }}
                 onBlur={() => {
-                  if (playerName.trim()) return;
-                  setPlayerName("YOU");
-                  safeSet(NAME_KEY, "YOU");
-                  setLeaderboard(makeLeaderboard([], highScoreRef.current, "YOU", playerIdRef.current));
+                  const nextName = playerName.trim()
+                    ? normalizePlayerName(playerName)
+                    : makeDefaultPlayerName(playerIdRef.current);
+                  setPlayerName(nextName);
+                  safeSet(NAME_KEY, nextName);
+                  setLeaderboard(makeLeaderboard([], highScoreRef.current, nextName, playerIdRef.current));
+                  void refreshLeaderboard(null, nextName, { checkName: true });
                 }}
               />
+              {nameLocked && <div style={styles.nameError}>{leaderboardError}</div>}
             </div>
             <div style={styles.homeScoreCard}>
               <div style={styles.homeScoreLabel}>YOUR BEST</div>
@@ -1632,6 +1743,8 @@ export default function App() {
             <div style={styles.onlineNote}>
               {leaderboardStatus === "online"
                 ? "オンラインランキングです。月が変わるとJST基準で自動的に新しいランキングに切り替わります。"
+                : leaderboardStatus === "name-taken"
+                ? leaderboardError
                 : leaderboardStatus === "error"
                 ? `${leaderboardError}。ローカル記録を表示中です。`
                 : "オンラインランキング未設定です。Supabase接続後に他ユーザーのスコアが表示されます。"}
@@ -1708,6 +1821,8 @@ const styles = {
   nameBox: { width: "100%", maxWidth: 260, textAlign: "left", marginTop: 8 },
   nameLabel: { display: "block", fontSize: 10, fontWeight: 900, color: "#c4b5fd", marginBottom: 6, letterSpacing: "0.08em" },
   nameInput: { width: "100%", boxSizing: "border-box", border: "1px solid rgba(216,180,254,0.45)", borderRadius: 14, background: "rgba(15,23,42,0.7)", color: "white", padding: "12px 14px", fontSize: 16, fontWeight: 800, outline: "none" },
+  nameInputError: { border: "1px solid rgba(251,113,133,0.95)", boxShadow: "0 0 0 3px rgba(251,113,133,0.14)" },
+  nameError: { marginTop: 6, color: "#fecdd3", fontSize: 11, fontWeight: 800, lineHeight: 1.35 },
   homeScoreCard: { width: "100%", maxWidth: 260, borderRadius: 18, padding: 16, background: "rgba(15,23,42,0.48)", border: "1px solid rgba(250,204,21,0.26)", boxSizing: "border-box" },
   homeScoreLabel: { fontSize: 11, color: "#fcd34d", fontWeight: 900 },
   homeScore: { fontSize: 34, fontWeight: 950, textShadow: "0 0 14px rgba(250,204,21,0.35)" },

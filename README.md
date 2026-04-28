@@ -23,6 +23,11 @@ alter table public.sky_climber_scores enable row level security;
 grant select, insert, update on public.sky_climber_scores to anon;
 grant select, insert, update on public.sky_climber_scores to authenticated;
 
+-- 同じ月に同じプレイヤーネームを複数人が使えないようにする
+-- 既存データに重複名がある場合は、重複を直してから実行してください
+create unique index if not exists sky_climber_scores_month_name_unique
+on public.sky_climber_scores (month_key, lower(name));
+
 drop policy if exists "Scores are readable" on public.sky_climber_scores;
 drop policy if exists "Players can upsert scores" on public.sky_climber_scores;
 drop policy if exists "Players can update scores" on public.sky_climber_scores;
