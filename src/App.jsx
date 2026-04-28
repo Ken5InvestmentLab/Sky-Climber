@@ -1758,7 +1758,6 @@ export default function App() {
             <div style={styles.topActions}>
               <button style={styles.miniButton} onClick={goHome}>トップへ</button>
               <button style={styles.miniButton} onClick={togglePause}>{paused ? "再開" : "一時停止"}</button>
-              <button style={styles.miniButton} onClick={openLeaderboard}>ランキング</button>
             </div>
             <div style={styles.stage}>
               <canvas ref={canvasRef} width={WIDTH} height={HEIGHT} style={styles.canvas} onContextMenu={(event) => event.preventDefault()} />
@@ -1832,6 +1831,6 @@ const styles = {
   rankName: { color: "white", fontWeight: 800, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", textAlign: "left" },
   rankScore: { color: "#bae6fd", fontWeight: 950, textAlign: "right" },
   onlineNote: { fontSize: 10, color: "#94a3b8", lineHeight: 1.4 },
-  topActions: { display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: 6, marginBottom: 8 },
+  topActions: { display: "grid", gridTemplateColumns: "1fr 1fr", gap: 6, marginBottom: 8 },
   miniButton: { border: "1px solid rgba(216,180,254,0.35)", borderRadius: 12, padding: "8px 6px", color: "white", background: "rgba(15,23,42,0.65)", fontWeight: 800, fontSize: 12, cursor: "pointer" },
 };
