@@ -7,6 +7,7 @@ const JUMP = -9.4;
 const MOVE_SPEED = 4.2;
 const POWERUP_DURATION = 720;
 const BOSS_INTRO_DURATION = 96;
+const BOSS_FLOOR_INTRO_DROP = 46;
 const STORAGE_KEY = "sky-climber-high-score";
 const NAME_KEY = "sky-climber-player-name";
 const PLAYER_ID_KEY = "sky-climber-player-id";
@@ -812,8 +813,8 @@ export default function App() {
           arena.platformsCleared = true;
         }
 
-        const floorY = arena.floorY + (1 - introProgress) * 92;
-        if (introProgress > 0.2 && p.y + p.r >= floorY) {
+        const floorY = arena.floorY + (1 - introProgress) * BOSS_FLOOR_INTRO_DROP;
+        if (p.y + p.r >= floorY) {
           p.y = floorY - p.r;
           p.vy = JUMP * 0.88;
           addBurst(p.x, floorY, 6, "#38bdf8");
@@ -827,7 +828,7 @@ export default function App() {
 
       const bossIntroActive = bossAlive && bossArena.current && (bossArena.current.intro || 0) > 0;
 
-      if (!bossAlive || bossIntroActive) platforms.current.forEach((platform) => {
+      if (!bossAlive) platforms.current.forEach((platform) => {
         const previousY = p.y - p.vy;
         const landed = p.vy > 0 && previousY + p.r <= platform.y && p.y + p.r >= platform.y;
         const withinX = p.x > platform.x - p.r && p.x < platform.x + platform.w + p.r;
@@ -1346,7 +1347,7 @@ export default function App() {
         const introProgress = clamp(1 - (arena.intro || 0) / introDuration, 0, 1);
         const easedIntro = introProgress * introProgress * (3 - 2 * introProgress);
         platformAlpha = arena.platformsCleared ? 0 : clamp((arena.intro || 0) / introDuration, 0, 1);
-        const floorY = arena.floorY - cameraY.current + (1 - easedIntro) * 64;
+        const floorY = arena.floorY - cameraY.current + (1 - easedIntro) * BOSS_FLOOR_INTRO_DROP;
         const ceilingY = arena.ceilingY - cameraY.current - (1 - easedIntro) * 24;
         const floorGrad = ctx.createLinearGradient(0, floorY - 18, 0, floorY + 22);
         floorGrad.addColorStop(0, "rgba(56,189,248,0.35)");
