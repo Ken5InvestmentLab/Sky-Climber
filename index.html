@@ -1,4 +1,10 @@
-import React, { useEffect, useRef, useState } from "react";
+import { defineConfig } from "vite";
+import react from "@vitejs/plugin-react";
+
+export default defineConfig({
+  plugins: [react()],
+  base: "/Sky-Climber/",
+});
 
 const WIDTH = 360;
 const HEIGHT = 640;
@@ -1062,7 +1068,7 @@ export default function App() {
       <div style={styles.phoneCard}>
         {screen === "home" && (
           <div style={styles.menuScreen}>
-            <div style={styles.logoOrb}>?</div>
+            <div style={styles.logoOrb}>✦</div>
             <div style={styles.bigTitle}>SKY CLIMBER</div>
             <div style={styles.overlayText}>魔法猫を操作して、空の城を登れ。</div>
             <div style={styles.nameBox}>
