@@ -299,6 +299,7 @@ export default function App() {
   const weapon = useRef({ rapid: 1, spread: 0, power: 1, orbit: 0, cooldown: 0, orbitAngle: 0 });
   const cameraY = useRef(0);
   const best = useRef(0);
+  const scoreBonus = useRef(0);
   const nextBoss = useRef(1000);
   const nextToast = useRef(500);
   const time = useRef(0);
@@ -463,6 +464,7 @@ export default function App() {
     weapon.current = { rapid: 1, spread: 0, power: 1, orbit: 0, cooldown: 0, orbitAngle: 0 };
     cameraY.current = 0;
     best.current = 0;
+    scoreBonus.current = 0;
     nextBoss.current = 1000;
     nextToast.current = 500;
     running.current = true;
@@ -895,7 +897,8 @@ export default function App() {
               enemy.hp -= bullet.damage || 1;
               if (enemy.hp <= 0) {
                 enemy.dead = true;
-                best.current += 150;
+                scoreBonus.current += 150;
+                best.current = Math.max(best.current, -cameraY.current / 8 + scoreBonus.current);
 
                 const arena = bossArena.current;
                 const dropCount = 5 + Math.floor(Math.random() * 3);
@@ -1107,7 +1110,8 @@ export default function App() {
         if (Math.abs(item.x - p.x) < 28 && Math.abs(item.y - p.y) < 32) {
           item.taken = true;
           if (item.type === "bonus") {
-            best.current += 50;
+            scoreBonus.current += 50;
+            best.current = Math.max(best.current, -cameraY.current / 8 + scoreBonus.current);
             addText("+50", item.x, item.y - 20, "#facc15");
           } else if (item.type === "upgrade") {
             applyUpgrade(UPGRADE_TYPES[Math.floor(Math.random() * UPGRADE_TYPES.length)]);
@@ -1148,7 +1152,7 @@ export default function App() {
         ? bossArena.current.cameraY
         : Math.min(cameraY.current, p.y - HEIGHT * 0.65);
       cameraY.current += (targetCamera - cameraY.current) * (bossArena.current ? 0.28 : 0.1);
-      best.current = Math.max(best.current, -cameraY.current / 8);
+      best.current = Math.max(best.current, -cameraY.current / 8 + scoreBonus.current);
       const currentScore = Math.floor(best.current);
       if (currentScore >= nextToast.current) {
         addText(`BONUS ${nextToast.current}m`, WIDTH / 2, cameraY.current + 94, "#facc15");
