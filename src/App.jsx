@@ -8,17 +8,39 @@ const MOVE_SPEED = 4.2;
 const POWERUP_DURATION = 720;
 const STORAGE_KEY = "sky-climber-high-score";
 const NAME_KEY = "sky-climber-player-name";
+const PLAYER_ID_KEY = "sky-climber-player-id";
+const LEADERBOARD_TABLE = "sky_climber_scores";
+const SUPABASE_URL = (import.meta.env.VITE_SUPABASE_URL || "").replace(/\/$/, "");
+const SUPABASE_ANON_KEY = import.meta.env.VITE_SUPABASE_ANON_KEY || "";
+const ONLINE_LEADERBOARD_ENABLED = Boolean(SUPABASE_URL && SUPABASE_ANON_KEY);
 
-const ENEMY_TYPES = ["zigzag", "swoop", "seeker", "patrol"];
+const ENEMY_TYPES = ["zigzag", "swoop", "seeker", "patrol", "charger", "shard", "warden"];
 const AREA_ENEMIES = {
   night: ["zigzag", "patrol"],
   sky: ["zigzag", "swoop"],
-  space: ["seeker", "zigzag", "swoop"],
-  dream: ["seeker", "swoop", "patrol", "zigzag"],
+  space: ["seeker", "zigzag", "swoop", "charger"],
+  dream: ["seeker", "swoop", "patrol", "zigzag", "charger", "shard", "warden"],
 };
 const POWER_TYPES = ["shield", "magnet", "slow", "clear", "bonus", "upgrade"];
 const UPGRADE_TYPES = ["rapid", "spread", "power", "orbit"];
-const BOSS_TYPES = ["core", "hunter", "void", "overlord"];
+const ENEMY_STATS = {
+  zigzag: { hp: 1, speed: 1.08, size: 20, color: "#ff7a00", accent: "#fef08a" },
+  swoop: { hp: 1, speed: 1.2, size: 22, color: "#00d4ff", accent: "#bae6fd" },
+  seeker: { hp: 2, speed: 1.08, size: 24, color: "#ff4d6d", accent: "#fecdd3" },
+  patrol: { hp: 2, speed: 0.95, size: 24, color: "#a855f7", accent: "#ddd6fe" },
+  charger: { hp: 3, speed: 1.32, size: 26, color: "#f97316", accent: "#fed7aa" },
+  shard: { hp: 2, speed: 1.52, size: 18, color: "#22d3ee", accent: "#cffafe" },
+  warden: { hp: 5, speed: 0.82, size: 30, color: "#84cc16", accent: "#ecfccb" },
+};
+const BOSS_FORMS = [
+  { type: "core", name: "異形核", color: "#ff3b3b", accent: "#00ffcc", move: 1, dash: 1, bullet: 1 },
+  { type: "hunter", name: "追跡者", color: "#f97316", accent: "#fef08a", move: 1.15, dash: 1.25, bullet: 1.1 },
+  { type: "void", name: "虚無の主", color: "#a855f7", accent: "#22d3ee", move: 1.05, dash: 1.05, bullet: 1.35 },
+  { type: "overlord", name: "支配者", color: "#ef4444", accent: "#facc15", move: 1.25, dash: 1.35, bullet: 1.5 },
+  { type: "eclipse", name: "蝕む王", color: "#0f172a", accent: "#f472b6", move: 1.3, dash: 1.25, bullet: 1.8 },
+  { type: "seraph", name: "星翼獣", color: "#38bdf8", accent: "#fef08a", move: 1.42, dash: 1.45, bullet: 1.75 },
+  { type: "hydra", name: "多頭星龍", color: "#22c55e", accent: "#fb7185", move: 1.22, dash: 1.15, bullet: 2.05 },
+];
 
 function clamp(value, min, max) {
   return Math.max(min, Math.min(max, value));
@@ -39,6 +61,73 @@ function safeSet(key, value) {
   } catch {}
 }
 
+function normalizePlayerName(name) {
+  return (name || "").trim().slice(0, 12) || "YOU";
+}
+
+function getPlayerId() {
+  const existing = safeGet(PLAYER_ID_KEY, "");
+  if (existing) return existing;
+  const next = typeof crypto !== "undefined" && crypto.randomUUID
+    ? crypto.randomUUID()
+    : `player-${Date.now()}-${Math.random().toString(16).slice(2)}`;
+  safeSet(PLAYER_ID_KEY, next);
+  return next;
+}
+
+function getJstDateParts(date = new Date()) {
+  const jst = new Date(date.getTime() + 9 * 60 * 60 * 1000);
+  return {
+    year: jst.getUTCFullYear(),
+    month: jst.getUTCMonth() + 1,
+  };
+}
+
+function getMonthKey(date = new Date()) {
+  const { year, month } = getJstDateParts(date);
+  return `${year}-${String(month).padStart(2, "0")}`;
+}
+
+function getMonthLabel(date = new Date()) {
+  const { year, month } = getJstDateParts(date);
+  return `${year}年${month}月`;
+}
+
+function getNextMonthlyResetText(date = new Date()) {
+  const { year, month } = getJstDateParts(date);
+  const nextYear = month === 12 ? year + 1 : year;
+  const nextMonth = month === 12 ? 1 : month + 1;
+  return `${nextYear}年${nextMonth}月1日 00:00 JST`;
+}
+
+function makeLeaderboard(rows, myScore, myName, playerId = "me") {
+  const entries = new Map();
+  rows.forEach((row) => {
+    const id = row.player_id || row.id || `${row.name}-${row.score}`;
+    const score = Number(row.score) || 0;
+    entries.set(id, {
+      id,
+      name: normalizePlayerName(row.name),
+      score,
+      me: id === playerId || row.me,
+    });
+  });
+
+  const displayName = normalizePlayerName(myName);
+  const current = entries.get(playerId);
+  entries.set(playerId, {
+    id: playerId,
+    name: displayName,
+    score: Math.max(Number(myScore) || 0, current?.score || 0),
+    me: true,
+  });
+
+  return [...entries.values()]
+    .sort((a, b) => b.score - a.score)
+    .slice(0, 100)
+    .map((row, index) => ({ ...row, rank: index + 1 }));
+}
+
 function hexToRgb(hex) {
   const clean = hex.replace("#", "");
   return {
@@ -53,6 +142,23 @@ function mixColor(a, b, t) {
   const cb = hexToRgb(b);
   const p = clamp(t, 0, 1);
   return `rgb(${Math.round(ca.r + (cb.r - ca.r) * p)},${Math.round(ca.g + (cb.g - ca.g) * p)},${Math.round(ca.b + (cb.b - ca.b) * p)})`;
+}
+
+function getThreat(score) {
+  const overLimit = Math.max(0, score - 3000);
+  return Math.pow(overLimit / 850, 1.16);
+}
+
+function getEnemyStats(type, score) {
+  const base = ENEMY_STATS[type] || ENEMY_STATS.zigzag;
+  const tier = Math.max(0, Math.floor((score - 2500) / 700));
+  const threat = getThreat(score);
+  return {
+    ...base,
+    hp: Math.max(1, Math.ceil(base.hp + tier * 0.55 + threat * base.hp * 0.55)),
+    speed: base.speed + Math.min(4.4, tier * 0.06 + threat * 0.18),
+    size: base.size + Math.min(9, threat * 0.8),
+  };
 }
 
 function getBackgroundColors(score) {
@@ -99,17 +205,6 @@ function makePlatforms(score = 0) {
   return list;
 }
 
-function makeLeaderboard(myScore, myName) {
-  const names = ["Luna", "Kai", "Mio", "Sora", "Neko", "Rin", "Aoi", "Yuzu", "Leo", "Hana"];
-  const rows = Array.from({ length: 99 }, (_, i) => ({
-    id: `cpu-${i}`,
-    name: `${names[i % names.length]}${Math.floor(i / names.length) + 1}`,
-    score: Math.max(60, Math.floor(5200 - i * 44 + Math.sin(i * 2.7) * 100)),
-  }));
-  rows.push({ id: "me", name: myName || "YOU", score: myScore, me: true });
-  return rows.sort((a, b) => b.score - a.score).slice(0, 100).map((row, index) => ({ ...row, rank: index + 1 }));
-}
-
 function findReachableSpot(platforms, playerY, fallbackX) {
   const target = platforms
     .filter((p) => !p.ground && p.y < playerY - 35 && p.y > playerY - 260)
@@ -118,14 +213,32 @@ function findReachableSpot(platforms, playerY, fallbackX) {
   return { x: clamp(target.x + target.w / 2, 44, WIDTH - 44), y: target.y - 34 };
 }
 
+function getBossRank(score) {
+  return Math.max(0, Math.floor(score / 1000) - 1);
+}
+
+function getBossCycle(score) {
+  return Math.floor(getBossRank(score) / BOSS_FORMS.length);
+}
+
+function getBossForm(score) {
+  const rank = getBossRank(score);
+  return BOSS_FORMS[rank % BOSS_FORMS.length];
+}
+
+function getBossFormByType(type) {
+  return BOSS_FORMS.find((form) => form.type === type) || BOSS_FORMS[0];
+}
+
 function getBossType(score) {
-  const stage = Math.floor(score / 1000);
-  return BOSS_TYPES[Math.min(BOSS_TYPES.length - 1, stage)];
+  return getBossForm(score).type;
 }
 
 function getBossHp(score) {
-  const stage = Math.floor(score / 1000);
-  return 120 + stage * 80 + stage * stage * 20;
+  const rank = getBossRank(score);
+  const cycle = getBossCycle(score);
+  const threat = getThreat(score);
+  return Math.floor(170 + rank * 105 + rank * rank * 24 + cycle * 420 + threat * 165);
 }
 
 function runSelfTests() {
@@ -134,12 +247,16 @@ function runSelfTests() {
   console.assert(clamp(11, 0, 10) === 10, "clamp applies max");
   console.assert(getBackgroundColors(500).length === 3, "background returns three colors");
   console.assert(makePlatforms().length > 1, "platforms are generated");
-  console.assert(makeLeaderboard(999, "YOU").length === 100, "leaderboard has 100 rows");
+  console.assert(makeLeaderboard([], 999, "YOU", "me").length === 1, "leaderboard includes the current player");
+  console.assert(getMonthKey(new Date("2026-04-30T18:00:00Z")) === "2026-05", "monthly leaderboard uses JST month boundaries");
   console.assert(Array.isArray(AREA_ENEMIES.night), "AREA_ENEMIES.night exists");
   console.assert(Array.isArray(AREA_ENEMIES[getArea(3500)]), "AREA_ENEMIES supports score-derived areas");
   console.assert(typeof POWERUP_DURATION === "number" && POWERUP_DURATION > 0, "POWERUP_DURATION is defined");
+  console.assert(getThreat(2500) === 0, "threat stays calm before late game");
+  console.assert(getThreat(5200) > getThreat(3600), "late-game threat keeps rising");
   console.assert(getBossType(0) === "core", "first boss should be core");
-  console.assert(getBossType(2500) === "void", "higher bosses should change type");
+  console.assert(getBossType(3000) === "void", "higher bosses should change type");
+  console.assert(getBossType(5000) === "eclipse", "boss roster should keep expanding past 4000m");
   console.assert(getBossHp(3000) > getBossHp(1000), "boss HP should scale upward");
 }
 
@@ -166,6 +283,7 @@ export default function App() {
   const pausedRef = useRef(false);
   const startedRef = useRef(false);
   const highScoreRef = useRef(Number(safeGet(STORAGE_KEY, "0")) || 0);
+  const playerIdRef = useRef(getPlayerId());
 
   const [screen, setScreen] = useState("home");
   const [score, setScore] = useState(0);
@@ -173,8 +291,13 @@ export default function App() {
   const [dead, setDead] = useState(false);
   const [paused, setPaused] = useState(false);
   const [started, setStarted] = useState(false);
-  const [playerName, setPlayerName] = useState(() => safeGet(NAME_KEY, "YOU"));
-  const [leaderboard, setLeaderboard] = useState(() => makeLeaderboard(highScoreRef.current, safeGet(NAME_KEY, "YOU")));
+  const [playerName, setPlayerName] = useState(() => safeGet(NAME_KEY, "YOU") || "YOU");
+  const [leaderboard, setLeaderboard] = useState(() => makeLeaderboard([], highScoreRef.current, safeGet(NAME_KEY, "YOU"), playerIdRef.current));
+  const [leaderboardStatus, setLeaderboardStatus] = useState(ONLINE_LEADERBOARD_ENABLED ? "loading" : "local");
+  const [leaderboardError, setLeaderboardError] = useState("");
+
+  const leaderboardMonth = getMonthLabel();
+  const leaderboardReset = getNextMonthlyResetText();
 
   const addText = (text, x, y, color = "#fff") => {
     floatingTexts.current.push({ text, x, y, color, life: 1 });
@@ -191,6 +314,64 @@ export default function App() {
         size: 2 + Math.random() * 3,
         color,
       });
+    }
+  };
+
+  const refreshLeaderboard = async (scoreToSave = null, nameOverride = playerName) => {
+    const displayName = normalizePlayerName(nameOverride);
+    const localScore = Math.max(highScoreRef.current, Number(scoreToSave) || 0);
+    const playerId = playerIdRef.current;
+
+    if (!ONLINE_LEADERBOARD_ENABLED) {
+      setLeaderboard(makeLeaderboard([], localScore, displayName, playerId));
+      setLeaderboardStatus("local");
+      setLeaderboardError("");
+      return;
+    }
+
+    const headers = {
+      apikey: SUPABASE_ANON_KEY,
+      Authorization: `Bearer ${SUPABASE_ANON_KEY}`,
+      "Content-Type": "application/json",
+    };
+    const monthKey = getMonthKey();
+
+    try {
+      setLeaderboardStatus("loading");
+      setLeaderboardError("");
+
+      if (scoreToSave != null) {
+        const submitResponse = await fetch(`${SUPABASE_URL}/rest/v1/${LEADERBOARD_TABLE}?on_conflict=month_key,player_id`, {
+          method: "POST",
+          headers: {
+            ...headers,
+            Prefer: "resolution=merge-duplicates",
+          },
+          body: JSON.stringify([{
+            month_key: monthKey,
+            player_id: playerId,
+            name: displayName,
+            score: localScore,
+          }]),
+        });
+        if (!submitResponse.ok) throw new Error(`submit ${submitResponse.status}`);
+      }
+
+      const params = new URLSearchParams({
+        select: "player_id,name,score,updated_at",
+        month_key: `eq.${monthKey}`,
+        order: "score.desc",
+        limit: "100",
+      });
+      const response = await fetch(`${SUPABASE_URL}/rest/v1/${LEADERBOARD_TABLE}?${params}`, { headers });
+      if (!response.ok) throw new Error(`leaderboard ${response.status}`);
+      const rows = await response.json();
+      setLeaderboard(makeLeaderboard(rows, localScore, displayName, playerId));
+      setLeaderboardStatus("online");
+    } catch (error) {
+      setLeaderboard(makeLeaderboard([], localScore, displayName, playerId));
+      setLeaderboardStatus("error");
+      setLeaderboardError("オンラインランキングを読み込めませんでした");
     }
   };
 
@@ -236,7 +417,7 @@ export default function App() {
     highScoreRef.current = nextHigh;
     safeSet(STORAGE_KEY, nextHigh);
     setHighScore(nextHigh);
-    setLeaderboard(makeLeaderboard(nextHigh, playerName));
+    void refreshLeaderboard(nextHigh);
     setPaused(false);
     setDead(true);
   };
@@ -266,12 +447,14 @@ export default function App() {
   };
 
   const openLeaderboard = () => {
-    setLeaderboard(makeLeaderboard(highScoreRef.current, playerName));
+    setLeaderboard(makeLeaderboard([], highScoreRef.current, playerName, playerIdRef.current));
+    void refreshLeaderboard(highScoreRef.current);
     setScreen("leaderboard");
   };
 
   useEffect(() => {
     runSelfTests();
+    void refreshLeaderboard();
   }, []);
 
   useEffect(() => {
@@ -329,28 +512,38 @@ export default function App() {
     };
 
     const spawnBoss = () => {
-      const type = getBossType(best.current);
+      const form = getBossForm(best.current);
+      const rank = getBossRank(best.current);
+      const cycle = getBossCycle(best.current);
+      const threat = getThreat(best.current);
+      const type = form.type;
       const hp = getBossHp(best.current);
       enemies.current.push({
         boss: true,
         type,
+        form,
+        rank,
+        cycle,
+        threat,
         x: WIDTH / 2,
         y: cameraY.current + 84,
         vx: 0,
         vy: 0,
         hp,
         maxHp: hp,
+        scale: 1 + Math.min(0.55, rank * 0.035 + cycle * 0.08),
         t: 0,
-        dashTimer: 240,
-        attackDelay: 160,
-        shotTimer: 130,
+        dashTimer: Math.max(76, 230 - rank * 9),
+        attackDelay: Math.max(80, 150 - rank * 5),
+        shotTimer: Math.max(52, 125 - rank * 4),
       });
-      const names = { core: "異形核", hunter: "追跡者", void: "虚無の主", overlord: "支配者" };
-      addText(names[type] || "BOSS", WIDTH / 2, cameraY.current + 120, "#fb7185");
+      addText(`${form.name} Lv.${rank + 1}${cycle > 0 ? `+${cycle}` : ""}`, WIDTH / 2, cameraY.current + 120, form.accent);
     };
 
     const fireBossPattern = (enemy, p) => {
-      const stage = Math.floor(best.current / 1000);
+      const rank = enemy.rank ?? getBossRank(best.current);
+      const threat = enemy.threat ?? getThreat(best.current);
+      const form = enemy.form || getBossFormByType(enemy.type);
       const phase2 = enemy.hp <= enemy.maxHp * 0.5;
 
       enemy.shotTimer = Math.max(0, (enemy.shotTimer || 0) - 1);
@@ -362,18 +555,17 @@ export default function App() {
       let speed;
 
       if (!phase2) {
-        // 通常
-        bulletCount = 3 + stage;
-        spread = 1.2 + stage * 0.1;
-        speed = 2 + stage * 0.1;
+        bulletCount = Math.min(34, Math.floor(3 + rank * 0.95 + form.bullet * 1.8 + threat * 1.6));
+        spread = 1.2 + rank * 0.09 + threat * 0.12;
+        speed = 2 + rank * 0.12 + threat * 0.2;
       } else {
         // HP50%以下：強化モード（広がり＋回転弾）
-        bulletCount = 6 + stage * 2;
-        spread = 2.5 + stage * 0.2;
-        speed = 2.8 + stage * 0.2;
+        bulletCount = Math.min(42, Math.floor(7 + rank * 1.65 + form.bullet * 2.2 + threat * 2.1));
+        spread = 2.4 + rank * 0.14 + threat * 0.18;
+        speed = 2.8 + rank * 0.18 + threat * 0.26;
 
         // 回転弾追加
-        const spinCount = 8 + stage * 2;
+        const spinCount = Math.min(38, Math.floor(8 + rank * 1.8 + threat * 2.5));
         for (let i = 0; i < spinCount; i++) {
           const angle = enemy.t * 0.1 + (Math.PI * 2 * i) / spinCount;
           bossBullets.current.push({
@@ -381,8 +573,9 @@ export default function App() {
             y: enemy.y,
             vx: Math.cos(angle) * speed * 0.7,
             vy: Math.sin(angle) * speed * 0.7,
-            r: 3 + stage * 0.3,
+            r: 3 + Math.min(5, rank * 0.22 + threat * 0.22),
             life: 200,
+            color: form.accent,
           });
         }
       }
@@ -397,21 +590,47 @@ export default function App() {
           y: enemy.y,
           vx: Math.cos(angle) * speed,
           vy: Math.sin(angle) * speed,
-          r: 4 + stage * 0.3,
+          r: 4 + Math.min(6, rank * 0.24 + threat * 0.26),
           life: 200,
+          color: form.color,
         });
       }
 
-      enemy.shotTimer = phase2 ? Math.max(20, 80 - stage * 6) : Math.max(35, 115 - stage * 7);
+      if ((enemy.type === "eclipse" || enemy.type === "seraph" || enemy.type === "hydra") && (phase2 || threat > 1.6)) {
+        const ringCount = Math.min(32, Math.floor(10 + rank + threat * 2));
+        for (let i = 0; i < ringCount; i += 1) {
+          const angle = enemy.t * 0.045 + (Math.PI * 2 * i) / ringCount;
+          bossBullets.current.push({
+            x: enemy.x + Math.cos(angle) * 18,
+            y: enemy.y + Math.sin(angle) * 18,
+            vx: Math.cos(angle) * speed * 0.62,
+            vy: Math.sin(angle) * speed * 0.62,
+            r: 3.4,
+            life: 180,
+            color: form.accent,
+          });
+        }
+      }
+
+      enemy.shotTimer = phase2
+        ? Math.max(14, Math.floor(76 - rank * 4.4 - threat * 4.2))
+        : Math.max(24, Math.floor(112 - rank * 5.3 - threat * 3.8));
     };
 
     const spawnEnemy = () => {
       const area = getArea(best.current);
+      const threat = getThreat(best.current);
       const pool = AREA_ENEMIES[area] || ENEMY_TYPES;
-      const type = pool[Math.floor(Math.random() * pool.length)];
+      const latePool = threat > 2
+        ? [...pool, "charger", "shard", "warden", "seeker"]
+        : threat > 0.7
+        ? [...pool, "charger", "shard"]
+        : pool;
+      const type = latePool[Math.floor(Math.random() * latePool.length)];
+      const stats = getEnemyStats(type, best.current);
       const lanes = [58, WIDTH / 2 - 14, WIDTH - 86];
       let lane = Math.floor(Math.random() * lanes.length);
-      let x = lanes[lane];
+      let x = clamp(lanes[lane] + (Math.random() - 0.5) * Math.min(80, threat * 18), 20, WIDTH - 42);
       if (Math.abs(x - player.current.x) < 52) {
         const safeLane = lanes.findIndex((laneX) => Math.abs(laneX - player.current.x) > 72);
         if (safeLane >= 0) {
@@ -424,16 +643,23 @@ export default function App() {
         type,
         x,
         y: cameraY.current - 120,
+        hp: stats.hp,
+        maxHp: stats.hp,
+        size: stats.size,
+        speed: stats.speed,
+        color: stats.color,
+        accent: stats.accent,
         t: Math.random() * 10,
         dir: Math.random() < 0.5 ? -1 : 1,
         lane,
-        wind: type === "seeker" ? 48 : 0,
+        wind: type === "seeker" || type === "charger" ? 44 : 0,
       });
     };
 
     const update = () => {
       const p = player.current;
       const difficulty = Math.min(1, best.current / 550);
+      const threat = getThreat(best.current);
       const chaos = Math.min(1, best.current / 5200);
       const bossAlive = enemies.current.some((enemy) => enemy.boss && !enemy.dead);
 
@@ -480,8 +706,12 @@ export default function App() {
         nextBoss.current += 1000;
       }
 
-      const maxEnemies = bossAlive ? 5 : Math.floor(3 + chaos * 22);
-      const spawnRate = bossAlive ? 0.002 + chaos * 0.006 : 0.002 + chaos * 0.018;
+      const maxEnemies = bossAlive
+        ? Math.floor(5 + chaos * 3 + Math.min(24, threat * 3.8))
+        : Math.floor(3 + chaos * 16 + Math.min(56, threat * 8.2));
+      const spawnRate = bossAlive
+        ? 0.002 + chaos * 0.006 + Math.min(0.04, threat * 0.0045)
+        : 0.002 + chaos * 0.016 + Math.min(0.08, threat * 0.0075);
       if (enemies.current.filter((enemy) => !enemy.boss).length < maxEnemies && Math.random() < spawnRate) {
         spawnEnemy();
       }
@@ -499,9 +729,10 @@ export default function App() {
 
       enemies.current.forEach((enemy) => {
         bullets.current.forEach((bullet) => {
-          const ex = enemy.boss ? enemy.x : enemy.x + 14;
-          const ey = enemy.boss ? enemy.y : enemy.y + 12;
-          const range = enemy.boss ? 38 : 20;
+          const enemySize = enemy.size || 24;
+          const ex = enemy.boss ? enemy.x : enemy.x + enemySize / 2;
+          const ey = enemy.boss ? enemy.y : enemy.y + enemySize / 2;
+          const range = enemy.boss ? 38 * (enemy.scale || 1) : enemySize * 0.78;
           if (Math.abs(bullet.x - ex) < range && Math.abs(bullet.y - ey) < range) {
             bullet.hit = true;
             if (enemy.boss) {
@@ -530,8 +761,13 @@ export default function App() {
                 addBurst(enemy.x, enemy.y, 90, "#facc15");
               }
             } else {
-              enemy.dead = true;
-              addBurst(ex, ey, 8, "#fb7185");
+              enemy.hp -= bullet.damage || 1;
+              if (enemy.hp <= 0) {
+                enemy.dead = true;
+                addBurst(ex, ey, 8 + Math.min(16, enemy.maxHp * 2), enemy.color || "#fb7185");
+              } else {
+                addBurst(ex, ey, 3, enemy.accent || "#fff");
+              }
             }
           }
         });
@@ -542,15 +778,19 @@ export default function App() {
         if (enemy.boss) {
           enemy.t += 1;
           const phase2 = enemy.hp <= enemy.maxHp * 0.45;
-          const stage = Math.floor(best.current / 1000);
+          const rank = enemy.rank ?? getBossRank(best.current);
+          const threat = enemy.threat ?? getThreat(best.current);
+          const form = enemy.form || getBossFormByType(enemy.type);
           const targetX = p.x;
-          const targetY = cameraY.current + (phase2 ? 96 : 82) + Math.sin(enemy.t * 0.035) * 18;
+          const targetY = cameraY.current + (phase2 ? 96 : 82) + Math.sin(enemy.t * 0.035) * (18 + Math.min(16, threat * 2));
           const dx = targetX - enemy.x;
           const dy = targetY - enemy.y;
-          const moveFactor = enemy.type === "overlord" ? 0.024 : enemy.type === "void" ? 0.02 : enemy.type === "hunter" ? 0.017 : 0.014;
+          const moveFactor = (0.012 + rank * 0.0018 + threat * 0.0008) * form.move;
           enemy.vx = enemy.vx * 0.92 + dx * moveFactor;
           enemy.vy = enemy.vy * 0.92 + dy * moveFactor;
-          const limit = phase2 ? 3.2 + stage * 0.25 : 1.8 + stage * 0.15;
+          const limit = phase2
+            ? 2.8 + rank * 0.32 + threat * 0.16
+            : 1.55 + rank * 0.18 + threat * 0.1;
           const speed = Math.hypot(enemy.vx, enemy.vy);
           if (speed > limit) {
             enemy.vx = (enemy.vx / speed) * limit;
@@ -559,34 +799,25 @@ export default function App() {
           enemy.attackDelay = Math.max(0, enemy.attackDelay - 1);
           enemy.dashTimer -= 1;
           fireBossPattern(enemy, p);
-          if (enemy.attackDelay <= 0 && enemy.dashTimer <= 0) {
+          if (rank >= 1 && enemy.attackDelay <= 0 && enemy.dashTimer <= 0) {
             const ax = p.x - enemy.x;
             const ay = p.y - enemy.y;
             const d = Math.hypot(ax, ay) || 1;
 
-            // フェーズ2は突進強化
-            const dash = phase2
-              ? 6.5 + stage * 0.4
-              : enemy.type === "overlord"
-              ? 4.8
-              : enemy.type === "void"
-              ? 4.2
-              : enemy.type === "hunter"
-              ? 3.6
-              : 3.0;
+            const dash = (phase2 ? 5.8 + rank * 0.46 + threat * 0.22 : 3.0 + rank * 0.28 + threat * 0.16) * form.dash;
 
             enemy.vx += (ax / d) * dash;
             enemy.vy += (ay / d) * dash;
 
             enemy.dashTimer = phase2
-              ? Math.max(60, 120 - stage * 8)
-              : Math.max(105, 180 - stage * 10);
+              ? Math.max(44, Math.floor(122 - rank * 8 - threat * 3.5))
+              : Math.max(76, Math.floor(190 - rank * 10 - threat * 4));
 
-            addText(phase2 ? "激怒" : "予兆", enemy.x, enemy.y - 40, "#fb7185");
+            addText(phase2 ? "激怒突進" : "突進予兆", enemy.x, enemy.y - 40, form.accent);
           }
           enemy.x = clamp(enemy.x + enemy.vx, 36, WIDTH - 36);
           enemy.y = clamp(enemy.y + enemy.vy, cameraY.current + 56, cameraY.current + HEIGHT * 0.38);
-          if (Math.abs(enemy.x - p.x) < 42 && Math.abs(enemy.y - p.y) < 42) {
+          if (Math.abs(enemy.x - p.x) < 34 + 12 * (enemy.scale || 1) && Math.abs(enemy.y - p.y) < 34 + 12 * (enemy.scale || 1)) {
             if (powers.current.shield > 0) {
               powers.current.shield = 0;
               enemy.hp -= 5;
@@ -598,7 +829,9 @@ export default function App() {
           return;
         }
 
-        const baseSpeed = (powers.current.slow > 0 ? 0.65 : 1) * (1.45 + difficulty * 1.55);
+        const enemyStats = getEnemyStats(enemy.type, best.current);
+        const enemySize = enemy.size || enemyStats.size;
+        const baseSpeed = (powers.current.slow > 0 ? 0.62 : 1) * (1.05 + difficulty * 1.1 + Math.min(5.2, threat * 0.24)) * (enemy.speed || enemyStats.speed);
         enemy.t += 0.05;
         let vx = 0;
         let vy = baseSpeed;
@@ -607,28 +840,43 @@ export default function App() {
             enemy.wind -= 1;
             vy *= 0.5;
           } else {
-            const dx = p.x - (enemy.x + 14);
-            const dy = p.y - (enemy.y + 12);
+            const dx = p.x - (enemy.x + enemySize / 2);
+            const dy = p.y - (enemy.y + enemySize / 2);
             const d = Math.hypot(dx, dy) || 1;
-            vx = (dx / d) * (0.8 + difficulty * 1.2);
-            vy = baseSpeed + (dy > 0 ? 0.6 : 0);
+            vx = (dx / d) * (0.8 + difficulty * 1.2 + threat * 0.16);
+            vy = baseSpeed + (dy > 0 ? 0.6 + threat * 0.08 : 0);
           }
         } else if (enemy.type === "zigzag") {
-          vx = Math.sin(enemy.t * 3) * (1.5 + difficulty * 2);
+          vx = Math.sin(enemy.t * 3) * (1.5 + difficulty * 2 + threat * 0.22);
         } else if (enemy.type === "swoop") {
-          vx = Math.sin(enemy.t * 2) * 2.2;
-          vy = baseSpeed + Math.abs(Math.sin(enemy.t * 2)) * 2.2;
+          vx = Math.sin(enemy.t * 2) * (2.2 + threat * 0.18);
+          vy = baseSpeed + Math.abs(Math.sin(enemy.t * 2)) * (2.2 + threat * 0.18);
         } else if (enemy.type === "patrol") {
-          vx = enemy.dir * (1.2 + difficulty * 1.2);
-          if (enemy.x < 10 || enemy.x > WIDTH - 30) enemy.dir *= -1;
+          vx = enemy.dir * (1.2 + difficulty * 1.2 + threat * 0.14);
+          if (enemy.x < 10 || enemy.x > WIDTH - enemySize - 4) enemy.dir *= -1;
+        } else if (enemy.type === "charger") {
+          if (enemy.wind > 0) {
+            enemy.wind -= 1;
+            vy *= 0.55;
+            vx = Math.sin(enemy.t * 6) * 0.9;
+          } else {
+            vx = Math.sign(p.x - (enemy.x + enemySize / 2)) * (1.8 + difficulty * 1.4 + threat * 0.2);
+            vy = baseSpeed + 1.25 + threat * 0.15;
+          }
+        } else if (enemy.type === "shard") {
+          vx = Math.sin(enemy.t * 5 + enemy.lane) * (3.1 + threat * 0.3);
+          vy = baseSpeed * 1.35;
+        } else if (enemy.type === "warden") {
+          vx = Math.sin(enemy.t * 1.4) * (1.1 + threat * 0.16);
+          vy = baseSpeed * 0.78;
         }
         enemy.x += vx;
         enemy.y += vy;
-        if (Math.abs(enemy.x + 14 - p.x) < 24 && Math.abs(enemy.y + 12 - p.y) < 24) {
+        if (Math.abs(enemy.x + enemySize / 2 - p.x) < enemySize * 0.7 && Math.abs(enemy.y + enemySize / 2 - p.y) < enemySize * 0.7) {
           if (powers.current.shield > 0) {
             powers.current.shield = 0;
             enemy.dead = true;
-            addBurst(p.x, p.y, 18, "#67e8f9");
+            addBurst(p.x, p.y, 18, enemy.color || "#67e8f9");
           } else {
             gameOver();
           }
@@ -736,44 +984,87 @@ export default function App() {
       if (p.y - cameraY.current > HEIGHT + 80) gameOver();
     };
 
+    const drawStarPath = (points, outer, inner, rotation = -Math.PI / 2) => {
+      for (let i = 0; i < points * 2; i += 1) {
+        const angle = rotation + (Math.PI * i) / points;
+        const r = i % 2 === 0 ? outer : inner;
+        const x = Math.cos(angle) * r;
+        const y = Math.sin(angle) * r;
+        if (i === 0) ctx.moveTo(x, y);
+        else ctx.lineTo(x, y);
+      }
+      ctx.closePath();
+    };
+
     const drawBossShape = (enemy) => {
       if (enemy.type === "core") {
-        ctx.arc(0, 0, 26, 0, Math.PI * 2);
+        drawStarPath(12, 32, 23, enemy.t * 0.01);
       } else if (enemy.type === "hunter") {
-        ctx.moveTo(0, -30);
-        ctx.lineTo(27, 24);
-        ctx.lineTo(-27, 24);
+        ctx.moveTo(0, -34);
+        ctx.lineTo(18, -4);
+        ctx.lineTo(34, 25);
+        ctx.lineTo(8, 16);
+        ctx.lineTo(0, 34);
+        ctx.lineTo(-8, 16);
+        ctx.lineTo(-34, 25);
+        ctx.lineTo(-18, -4);
         ctx.closePath();
       } else if (enemy.type === "void") {
-        for (let i = 0; i < 10; i += 1) {
-          const a = (Math.PI * 2 * i) / 10;
-          const r = i % 2 === 0 ? 30 : 14;
-          const x = Math.cos(a) * r;
-          const y = Math.sin(a) * r;
-          if (i === 0) ctx.moveTo(x, y);
-          else ctx.lineTo(x, y);
-        }
+        drawStarPath(10, 36, 14, enemy.t * 0.018);
+      } else if (enemy.type === "overlord") {
+        drawStarPath(8, 38, 28, Math.PI / 8);
+      } else if (enemy.type === "eclipse") {
+        ctx.arc(0, 0, 35, 0.25 * Math.PI, 1.75 * Math.PI);
+        ctx.quadraticCurveTo(-10, 0, 0, 28);
+        ctx.quadraticCurveTo(12, 0, 0, -28);
         ctx.closePath();
+      } else if (enemy.type === "seraph") {
+        ctx.moveTo(0, -38);
+        ctx.bezierCurveTo(30, -18, 42, 8, 20, 32);
+        ctx.quadraticCurveTo(8, 22, 0, 38);
+        ctx.quadraticCurveTo(-8, 22, -20, 32);
+        ctx.bezierCurveTo(-42, 8, -30, -18, 0, -38);
+        ctx.closePath();
+      } else if (enemy.type === "hydra") {
+        drawStarPath(7, 39, 25, enemy.t * 0.012);
       } else {
-        ctx.rect(-28, -28, 56, 56);
+        drawStarPath(9, 34, 22);
       }
     };
 
     const drawEnemyShape = (enemy) => {
+      const size = enemy.size || 24;
+      const r = size / 2;
       if (enemy.type === "zigzag") {
-        ctx.rect(-10, -10, 20, 20);
+        ctx.moveTo(-r, -r * 0.55);
+        ctx.lineTo(-r * 0.1, -r);
+        ctx.lineTo(r, -r * 0.35);
+        ctx.lineTo(r * 0.25, r);
+        ctx.lineTo(-r, r * 0.45);
+        ctx.closePath();
       } else if (enemy.type === "swoop") {
-        ctx.moveTo(0, -13);
-        ctx.lineTo(13, 12);
-        ctx.lineTo(-13, 12);
+        ctx.moveTo(0, -r * 1.05);
+        ctx.lineTo(r * 1.05, r * 0.75);
+        ctx.quadraticCurveTo(0, r * 0.28, -r * 1.05, r * 0.75);
         ctx.closePath();
       } else if (enemy.type === "seeker") {
-        ctx.arc(0, 0, 12, 0, Math.PI * 2);
+        ctx.arc(0, 0, r, 0, Math.PI * 2);
+      } else if (enemy.type === "charger") {
+        ctx.moveTo(0, -r * 1.15);
+        ctx.lineTo(r * 1.1, -r * 0.1);
+        ctx.lineTo(r * 0.38, r);
+        ctx.lineTo(-r * 0.38, r);
+        ctx.lineTo(-r * 1.1, -r * 0.1);
+        ctx.closePath();
+      } else if (enemy.type === "shard") {
+        drawStarPath(4, r * 1.1, r * 0.35, enemy.t);
+      } else if (enemy.type === "warden") {
+        drawStarPath(6, r * 1.08, r * 0.76, Math.PI / 6);
       } else {
-        ctx.moveTo(-13, 0);
-        ctx.lineTo(0, -13);
-        ctx.lineTo(13, 0);
-        ctx.lineTo(0, 13);
+        ctx.moveTo(-r, 0);
+        ctx.lineTo(0, -r);
+        ctx.lineTo(r, 0);
+        ctx.lineTo(0, r);
         ctx.closePath();
       }
     };
@@ -877,8 +1168,8 @@ export default function App() {
 
       bossBullets.current.forEach((bullet) => {
         const y = bullet.y - cameraY.current;
-        ctx.fillStyle = "#fb7185";
-        ctx.shadowColor = "#fb7185";
+        ctx.fillStyle = bullet.color || "#fb7185";
+        ctx.shadowColor = bullet.color || "#fb7185";
         ctx.shadowBlur = 14;
         ctx.beginPath();
         ctx.arc(bullet.x, y, bullet.r || 4, 0, Math.PI * 2);
@@ -890,41 +1181,100 @@ export default function App() {
         const y = enemy.y - cameraY.current;
         if (enemy.boss) {
           const phase2 = enemy.hp <= enemy.maxHp * 0.45;
+          const form = enemy.form || getBossFormByType(enemy.type);
+          const pulse = 1 + Math.sin(enemy.t * 0.08) * 0.03;
           ctx.save();
           ctx.translate(enemy.x, y);
-          ctx.fillStyle = enemy.type === "overlord" ? "#f97316" : phase2 ? "#ff4d6d" : "#ff3b3b";
-          ctx.shadowColor = ctx.fillStyle;
-          ctx.shadowBlur = 24;
+          ctx.rotate(Math.sin(enemy.t * 0.018) * 0.08);
+          ctx.scale((enemy.scale || 1) * pulse, (enemy.scale || 1) * pulse);
+          const bossBody = ctx.createRadialGradient(-8, -10, 4, 0, 0, 44);
+          bossBody.addColorStop(0, phase2 ? "#fff1f2" : "#f8fafc");
+          bossBody.addColorStop(0.35, phase2 ? form.accent : form.color);
+          bossBody.addColorStop(1, form.color);
+          ctx.fillStyle = bossBody;
+          ctx.shadowColor = phase2 ? form.accent : form.color;
+          ctx.shadowBlur = 28 + (phase2 ? 10 : 0);
           ctx.beginPath();
           drawBossShape(enemy);
           ctx.fill();
+          ctx.lineWidth = phase2 ? 3 : 2;
+          ctx.strokeStyle = form.accent;
+          ctx.stroke();
           ctx.shadowBlur = 0;
+          ctx.globalAlpha = 0.85;
+          ctx.strokeStyle = form.accent;
+          ctx.lineWidth = 1.6;
+          ctx.beginPath();
+          ctx.arc(0, 0, 42, enemy.t * 0.025, enemy.t * 0.025 + Math.PI * 1.35);
+          ctx.stroke();
+          ctx.beginPath();
+          ctx.arc(0, 0, 50, -enemy.t * 0.018, -enemy.t * 0.018 + Math.PI * 0.9);
+          ctx.stroke();
+          ctx.globalAlpha = 1;
+          if (enemy.type === "hydra") {
+            ctx.fillStyle = form.accent;
+            [-22, 0, 22].forEach((headX, index) => {
+              ctx.beginPath();
+              ctx.arc(headX, -30 + Math.sin(enemy.t * 0.08 + index) * 3, 8, 0, Math.PI * 2);
+              ctx.fill();
+            });
+          }
+          if (enemy.type === "seraph") {
+            ctx.strokeStyle = "#fef9c3";
+            ctx.lineWidth = 3;
+            ctx.beginPath();
+            ctx.moveTo(-42, -4);
+            ctx.quadraticCurveTo(-70, -24, -46, -42);
+            ctx.moveTo(42, -4);
+            ctx.quadraticCurveTo(70, -24, 46, -42);
+            ctx.stroke();
+          }
           ctx.fillStyle = "#000";
           ctx.beginPath();
           ctx.arc(-8, -4, 3, 0, Math.PI * 2);
           ctx.arc(8, -4, 3, 0, Math.PI * 2);
           ctx.fill();
           ctx.fillStyle = "rgba(0,0,0,0.6)";
-          rounded(-30, -44, 60, 6, 3);
-          ctx.fillStyle = "#00ffcc";
-          rounded(-30, -44, 60 * clamp(enemy.hp / enemy.maxHp, 0, 1), 6, 3);
+          rounded(-34, -52, 68, 7, 3);
+          ctx.fillStyle = phase2 ? "#fb7185" : form.accent;
+          rounded(-34, -52, 68 * clamp(enemy.hp / enemy.maxHp, 0, 1), 7, 3);
           ctx.restore();
           return;
         }
-        const colorMap = { seeker: "#ff4d6d", zigzag: "#ff7a00", swoop: "#00d4ff", patrol: "#a855f7" };
-        const color = colorMap[enemy.type] || "#ff3b3b";
+        const size = enemy.size || 24;
+        const color = enemy.color || ENEMY_STATS[enemy.type]?.color || "#ff3b3b";
+        const accent = enemy.accent || ENEMY_STATS[enemy.type]?.accent || "#fff";
         ctx.save();
-        ctx.translate(enemy.x + 14, y + 12);
-        ctx.fillStyle = color;
+        ctx.translate(enemy.x + size / 2, y + size / 2);
+        ctx.rotate(Math.sin(enemy.t * 2) * 0.18);
+        const enemyBody = ctx.createRadialGradient(-size * 0.2, -size * 0.25, 2, 0, 0, size * 0.72);
+        enemyBody.addColorStop(0, accent);
+        enemyBody.addColorStop(0.42, color);
+        enemyBody.addColorStop(1, "#0f172a");
+        ctx.fillStyle = enemyBody;
         ctx.shadowColor = color;
-        ctx.shadowBlur = 12;
+        ctx.shadowBlur = 12 + Math.min(10, (enemy.maxHp || 1) * 1.2);
         ctx.beginPath();
         drawEnemyShape(enemy);
         ctx.fill();
+        ctx.strokeStyle = accent;
+        ctx.lineWidth = 1.2;
+        ctx.stroke();
+        ctx.shadowBlur = 0;
+        if ((enemy.maxHp || 1) > 1) {
+          ctx.fillStyle = "rgba(15,23,42,0.82)";
+          rounded(-size * 0.55, -size * 0.9, size * 1.1, 4, 2);
+          ctx.fillStyle = accent;
+          rounded(-size * 0.55, -size * 0.9, size * 1.1 * clamp((enemy.hp || 1) / (enemy.maxHp || 1), 0, 1), 4, 2);
+        }
         ctx.fillStyle = "#fff";
         ctx.beginPath();
-        ctx.arc(-4, -2, 2, 0, Math.PI * 2);
-        ctx.arc(4, -2, 2, 0, Math.PI * 2);
+        ctx.arc(-size * 0.18, -size * 0.12, 2, 0, Math.PI * 2);
+        ctx.arc(size * 0.18, -size * 0.12, 2, 0, Math.PI * 2);
+        ctx.fill();
+        ctx.fillStyle = accent;
+        ctx.beginPath();
+        ctx.arc(0, size * 0.22, Math.max(2, size * 0.12), 0, Math.PI * 2);
         ctx.fill();
         ctx.restore();
       });
@@ -1072,10 +1422,16 @@ export default function App() {
                 value={playerName}
                 maxLength={12}
                 onChange={(event) => {
-                  const nextName = event.target.value || "YOU";
+                  const nextName = event.target.value;
                   setPlayerName(nextName);
                   safeSet(NAME_KEY, nextName);
-                  setLeaderboard(makeLeaderboard(highScoreRef.current, nextName));
+                  setLeaderboard(makeLeaderboard([], highScoreRef.current, nextName, playerIdRef.current));
+                }}
+                onBlur={() => {
+                  if (playerName.trim()) return;
+                  setPlayerName("YOU");
+                  safeSet(NAME_KEY, "YOU");
+                  setLeaderboard(makeLeaderboard([], highScoreRef.current, "YOU", playerIdRef.current));
                 }}
               />
             </div>
@@ -1094,6 +1450,8 @@ export default function App() {
               <button style={styles.smallButton} onClick={() => setScreen("home")}>← トップ</button>
               <div style={styles.rankTitle}>MONTHLY TOP 100</div>
             </div>
+            <div style={styles.rankMeta}>{leaderboardMonth}ランキング / リセット: {leaderboardReset}</div>
+            {leaderboardStatus === "loading" && <div style={styles.rankMeta}>オンラインランキングを読み込み中...</div>}
             <div style={styles.leaderboardList}>
               {leaderboard.map((row) => (
                 <div key={row.id} style={{ ...styles.rankRow, ...(row.me ? styles.myRankRow : {}) }}>
@@ -1103,7 +1461,13 @@ export default function App() {
                 </div>
               ))}
             </div>
-            <div style={styles.onlineNote}>今はローカルの仮ランキング。Supabase接続で本物の月間ランキングに差し替え可能。</div>
+            <div style={styles.onlineNote}>
+              {leaderboardStatus === "online"
+                ? "オンラインランキングです。月が変わるとJST基準で自動的に新しいランキングに切り替わります。"
+                : leaderboardStatus === "error"
+                ? `${leaderboardError}。ローカル記録を表示中です。`
+                : "オンラインランキング未設定です。Supabase接続後に他ユーザーのスコアが表示されます。"}
+            </div>
           </div>
         )}
 
@@ -1112,7 +1476,6 @@ export default function App() {
             <div style={styles.header}>
               <div>
                 <div style={styles.title}>SKY CLIMBER</div>
-                <div style={styles.subtitle}>武器進化 / ボス追跡 / 月間ランキング対応予定</div>
               </div>
               <div style={styles.scoreBox}>
                 <div style={styles.score}>{score}m</div>
@@ -1186,6 +1549,7 @@ const styles = {
   headerRow: { width: "100%", display: "flex", alignItems: "center", justifyContent: "space-between", gap: 10 },
   smallButton: { border: "1px solid rgba(216,180,254,0.35)", borderRadius: 12, padding: "9px 11px", color: "white", background: "rgba(15,23,42,0.65)", fontWeight: 800, cursor: "pointer" },
   rankTitle: { fontSize: 15, fontWeight: 950, color: "#fcd34d" },
+  rankMeta: { width: "100%", color: "#cbd5e1", fontSize: 11, fontWeight: 800, textAlign: "left", lineHeight: 1.35 },
   leaderboardList: { width: "100%", maxHeight: "calc(100dvh - 160px)", overflowY: "auto", paddingRight: 4, display: "flex", flexDirection: "column", gap: 6 },
   rankRow: { display: "grid", gridTemplateColumns: "54px 1fr 82px", alignItems: "center", gap: 8, padding: "10px 10px", borderRadius: 12, background: "rgba(15,23,42,0.54)", border: "1px solid rgba(148,163,184,0.18)", fontSize: 13 },
   myRankRow: { border: "1px solid rgba(250,204,21,0.75)", background: "rgba(250,204,21,0.13)" },
