@@ -256,7 +256,7 @@ function getBossHp(score) {
   const rank = getBossRank(score);
   const cycle = getBossCycle(score);
   const threat = getThreat(score);
-  return Math.floor(420 + rank * 190 + rank * rank * 52 + cycle * 760 + threat * 310);
+  return Math.floor(220 + rank * 78 + rank * rank * 34 + cycle * 420 + threat * 240);
 }
 
 function runSelfTests() {
@@ -669,7 +669,6 @@ export default function App() {
             vx: Math.cos(angle) * speed * 0.7,
             vy: Math.sin(angle) * speed * 0.7,
             r: 3 + Math.min(5, rank * 0.22 + threat * 0.22),
-            life: 200,
             color: form.accent,
           });
         }
@@ -686,7 +685,6 @@ export default function App() {
           vx: Math.cos(angle) * speed,
           vy: Math.sin(angle) * speed,
           r: 4 + Math.min(6, rank * 0.24 + threat * 0.26),
-          life: 200,
           color: form.color,
         });
       }
@@ -701,7 +699,6 @@ export default function App() {
             vx: Math.cos(angle) * speed * 0.62,
             vy: Math.sin(angle) * speed * 0.62,
             r: 3.4,
-            life: 180,
             color: form.accent,
           });
         }
@@ -1035,7 +1032,7 @@ export default function App() {
       bossBullets.current.forEach((bullet) => {
         bullet.x += bullet.vx;
         bullet.y += bullet.vy;
-        bullet.life -= 1;
+        if (bullet.life != null) bullet.life -= 1;
         if (Math.abs(bullet.x - p.x) < 18 && Math.abs(bullet.y - p.y) < 22) {
           bullet.hit = true;
           if (powers.current.shield > 0) {
@@ -1046,7 +1043,7 @@ export default function App() {
           }
         }
       });
-      bossBullets.current = bossBullets.current.filter((bullet) => !bullet.hit && bullet.life > 0 && bullet.y > cameraY.current - 80 && bullet.y < cameraY.current + HEIGHT + 100 && bullet.x > -60 && bullet.x < WIDTH + 60);
+      bossBullets.current = bossBullets.current.filter((bullet) => !bullet.hit && (bullet.life == null || bullet.life > 0) && bullet.y > cameraY.current - 80 && bullet.y < cameraY.current + HEIGHT + 100 && bullet.x > -60 && bullet.x < WIDTH + 60);
 
       items.current.forEach((item) => {
         item.spin += 0.06;
@@ -1348,7 +1345,6 @@ export default function App() {
         const easedIntro = introProgress * introProgress * (3 - 2 * introProgress);
         platformAlpha = arena.platformsCleared ? 0 : clamp((arena.intro || 0) / introDuration, 0, 1);
         const floorY = arena.floorY - cameraY.current + (1 - easedIntro) * BOSS_FLOOR_INTRO_DROP;
-        const ceilingY = arena.ceilingY - cameraY.current - (1 - easedIntro) * 24;
         const floorGrad = ctx.createLinearGradient(0, floorY - 18, 0, floorY + 22);
         floorGrad.addColorStop(0, "rgba(56,189,248,0.35)");
         floorGrad.addColorStop(1, "rgba(15,23,42,0.95)");
@@ -1361,25 +1357,6 @@ export default function App() {
         ctx.shadowBlur = 0;
         ctx.restore();
 
-        ctx.save();
-        ctx.globalAlpha = clamp((easedIntro - 0.22) / 0.78, 0, 1);
-        ctx.strokeStyle = "rgba(251,113,133,0.9)";
-        ctx.lineWidth = 4;
-        ctx.setLineDash([12, 8]);
-        ctx.beginPath();
-        ctx.moveTo(14, ceilingY);
-        ctx.lineTo(WIDTH - 14, ceilingY);
-        ctx.stroke();
-        ctx.setLineDash([]);
-
-        ctx.strokeStyle = "rgba(254,242,242,0.82)";
-        ctx.lineWidth = 2;
-        ctx.beginPath();
-        ctx.arc(WIDTH / 2, ceilingY + 22, 9, Math.PI, 0);
-        ctx.stroke();
-        ctx.fillStyle = "rgba(254,242,242,0.82)";
-        rounded(WIDTH / 2 - 11, ceilingY + 20, 22, 15, 4);
-        ctx.restore();
       }
 
       if (platformAlpha > 0.01) {
