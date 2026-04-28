@@ -265,6 +265,7 @@ export default function App() {
   const keys = useRef({ left: false, right: false });
   const player = useRef({ x: WIDTH / 2, y: HEIGHT - 120, vx: 0, vy: 0, r: 15 });
   const platforms = useRef(makePlatforms());
+  const bossArena = useRef(null);
   const enemies = useRef([]);
   const bullets = useRef([]);
   const bossBullets = useRef([]);
@@ -386,6 +387,7 @@ export default function App() {
   const reset = () => {
     player.current = { x: WIDTH / 2, y: HEIGHT - 120, vx: 0, vy: 0, r: 15 };
     platforms.current = makePlatforms();
+    bossArena.current = null;
     enemies.current = [];
     bullets.current = [];
     bossBullets.current = [];
@@ -511,6 +513,25 @@ export default function App() {
       else ctx.stroke();
     };
 
+    const makeArenaExitPlatforms = (arena) => {
+      const list = [{ x: 0, y: arena.floorY, w: WIDTH, ground: true }];
+      let x = WIDTH / 2 - 45;
+      for (let i = 1; i <= 12; i += 1) {
+        const spread = 120 + Math.min(240, best.current * 0.04);
+        x = clamp(x + Math.random() * spread - spread / 2, 24, WIDTH - 110);
+        list.push({ x, y: arena.floorY - 88 * i, w: 92, ground: false });
+      }
+      return list;
+    };
+
+    const clearBossArena = () => {
+      if (!bossArena.current) return;
+      const arena = bossArena.current;
+      platforms.current = makeArenaExitPlatforms(arena);
+      bossArena.current = null;
+      addText("ROUTE OPEN", WIDTH / 2, cameraY.current + 150, "#facc15");
+    };
+
     const spawnBoss = () => {
       const form = getBossForm(best.current);
       const rank = getBossRank(best.current);
@@ -518,6 +539,14 @@ export default function App() {
       const threat = getThreat(best.current);
       const type = form.type;
       const hp = getBossHp(best.current);
+      const arenaCameraY = cameraY.current;
+      bossArena.current = {
+        cameraY: arenaCameraY,
+        ceilingY: arenaCameraY + 72,
+        floorY: arenaCameraY + HEIGHT - 44,
+      };
+      platforms.current = [];
+      bossBullets.current = [];
       enemies.current.push({
         boss: true,
         type,
@@ -661,7 +690,7 @@ export default function App() {
       const difficulty = Math.min(1, best.current / 550);
       const threat = getThreat(best.current);
       const chaos = Math.min(1, best.current / 5200);
-      const bossAlive = enemies.current.some((enemy) => enemy.boss && !enemy.dead);
+      let bossAlive = enemies.current.some((enemy) => enemy.boss && !enemy.dead);
 
       weapon.current.cooldown -= 1;
       const fireRate = Math.max(5, 22 - weapon.current.rapid * 2);
@@ -691,7 +720,21 @@ export default function App() {
       if (p.x < -p.r) p.x = WIDTH + p.r;
       if (p.x > WIDTH + p.r) p.x = -p.r;
 
-      platforms.current.forEach((platform) => {
+      if (bossAlive && bossArena.current) {
+        const arena = bossArena.current;
+        if (p.y + p.r >= arena.floorY) {
+          p.y = arena.floorY - p.r;
+          p.vy = JUMP * 0.88;
+          addBurst(p.x, arena.floorY, 6, "#38bdf8");
+        }
+        if (p.y - p.r < arena.ceilingY) {
+          p.y = arena.ceilingY + p.r;
+          p.vy = Math.max(1.8, Math.abs(p.vy) * 0.28);
+          addBurst(p.x, arena.ceilingY, 6, "#fb7185");
+        }
+      }
+
+      if (!bossAlive) platforms.current.forEach((platform) => {
         const previousY = p.y - p.vy;
         const landed = p.vy > 0 && previousY + p.r <= platform.y && p.y + p.r >= platform.y;
         const withinX = p.x > platform.x - p.r && p.x < platform.x + platform.w + p.r;
@@ -704,6 +747,7 @@ export default function App() {
       if (!bossAlive && best.current >= nextBoss.current) {
         spawnBoss();
         nextBoss.current += 1000;
+        bossAlive = true;
       }
 
       const maxEnemies = bossAlive
@@ -718,17 +762,19 @@ export default function App() {
 
       const powerRate = 0.0007 + difficulty * 0.0004;
       const upgradeRate = 0.00035 + difficulty * 0.0003;
-      if (items.current.length < 2 && Math.random() < powerRate) {
+      if (!bossAlive && items.current.length < 2 && Math.random() < powerRate) {
         const spot = findReachableSpot(platforms.current, p.y, p.x);
         items.current.push({ x: spot.x, y: spot.y, type: POWER_TYPES[Math.floor(Math.random() * POWER_TYPES.length)], spin: 0 });
       }
-      if (items.current.length < 2 && Math.random() < upgradeRate) {
+      if (!bossAlive && items.current.length < 2 && Math.random() < upgradeRate) {
         const spot = findReachableSpot(platforms.current, p.y, p.x);
         items.current.push({ x: spot.x, y: spot.y, type: "upgrade", spin: 0 });
       }
 
       enemies.current.forEach((enemy) => {
+        if (enemy.dead) return;
         bullets.current.forEach((bullet) => {
+          if (enemy.dead) return;
           const enemySize = enemy.size || 24;
           const ex = enemy.boss ? enemy.x : enemy.x + enemySize / 2;
           const ey = enemy.boss ? enemy.y : enemy.y + enemySize / 2;
@@ -741,21 +787,20 @@ export default function App() {
                 enemy.dead = true;
                 best.current += 150;
 
-                // ボス撃破報酬：複数ドロップ
-                const dropCount = 3 + Math.floor(Math.random() * 3);
+                const arena = bossArena.current;
+                const dropCount = 5 + Math.floor(Math.random() * 3);
                 for (let i = 0; i < dropCount; i++) {
-                  const spot = findReachableSpot(platforms.current, p.y, enemy.x + (Math.random() - 0.5) * 80);
-                  const isUpgrade = Math.random() < 0.5;
+                  const isUpgrade = i === 0 || Math.random() < 0.45;
                   items.current.push({
-                    x: spot.x,
-                    y: spot.y,
+                    x: clamp(enemy.x + (i - (dropCount - 1) / 2) * 32 + (Math.random() - 0.5) * 16, 36, WIDTH - 36),
+                    y: arena ? arena.floorY - 46 - Math.random() * 34 : enemy.y + 26 + Math.random() * 34,
                     type: isUpgrade ? "upgrade" : POWER_TYPES[Math.floor(Math.random() * POWER_TYPES.length)],
                     spin: Math.random() * Math.PI,
                   });
                 }
 
-                // 追加で確定アップグレード1つ
                 applyUpgrade(UPGRADE_TYPES[Math.floor(Math.random() * UPGRADE_TYPES.length)]);
+                clearBossArena();
 
                 addText("BOSS BREAK!", enemy.x, enemy.y - 40, "#facc15");
                 addBurst(enemy.x, enemy.y, 90, "#facc15");
@@ -952,8 +997,10 @@ export default function App() {
       });
       floatingTexts.current = floatingTexts.current.filter((text) => text.life > 0);
 
-      const targetCamera = Math.min(cameraY.current, p.y - HEIGHT * 0.65);
-      cameraY.current += (targetCamera - cameraY.current) * 0.1;
+      const targetCamera = bossArena.current
+        ? bossArena.current.cameraY
+        : Math.min(cameraY.current, p.y - HEIGHT * 0.65);
+      cameraY.current += (targetCamera - cameraY.current) * (bossArena.current ? 0.28 : 0.1);
       best.current = Math.max(best.current, -cameraY.current / 8);
       const currentScore = Math.floor(best.current);
       if (currentScore >= nextToast.current) {
@@ -967,19 +1014,21 @@ export default function App() {
         setHighScore(currentScore);
       }
 
-      let top = Math.min(...platforms.current.map((platform) => platform.y));
-      let lastX = platforms.current.filter((platform) => !platform.ground).sort((a, b) => a.y - b.y)[0]?.x ?? WIDTH / 2;
-      platforms.current = platforms.current.map((platform) => {
-        if (platform.ground) return platform;
-        if (platform.y - cameraY.current > HEIGHT + 40) {
-          top -= 80;
-          const spread = 120 + Math.min(240, best.current * 0.05);
-          const x = clamp(lastX + Math.random() * spread - spread / 2, 20, WIDTH - 110);
-          lastX = x;
-          return { ...platform, x, y: top, w: Math.max(72, 94 - difficulty * 16) };
-        }
-        return platform;
-      });
+      if (!bossArena.current) {
+        let top = Math.min(...platforms.current.map((platform) => platform.y));
+        let lastX = platforms.current.filter((platform) => !platform.ground).sort((a, b) => a.y - b.y)[0]?.x ?? WIDTH / 2;
+        platforms.current = platforms.current.map((platform) => {
+          if (platform.ground) return platform;
+          if (platform.y - cameraY.current > HEIGHT + 40) {
+            top -= 80;
+            const spread = 120 + Math.min(240, best.current * 0.05);
+            const x = clamp(lastX + Math.random() * spread - spread / 2, 20, WIDTH - 110);
+            lastX = x;
+            return { ...platform, x, y: top, w: Math.max(72, 94 - difficulty * 16) };
+          }
+          return platform;
+        });
+      }
 
       if (p.y - cameraY.current > HEIGHT + 80) gameOver();
     };
@@ -1069,6 +1118,91 @@ export default function App() {
       }
     };
 
+    const drawItemIcon = (type, color) => {
+      ctx.strokeStyle = "rgba(15,23,42,0.9)";
+      ctx.lineWidth = 3;
+      ctx.lineCap = "round";
+      ctx.lineJoin = "round";
+
+      if (type === "shield") {
+        ctx.fillStyle = color;
+        ctx.beginPath();
+        ctx.moveTo(0, -13);
+        ctx.quadraticCurveTo(13, -9, 12, 1);
+        ctx.quadraticCurveTo(10, 11, 0, 16);
+        ctx.quadraticCurveTo(-10, 11, -12, 1);
+        ctx.quadraticCurveTo(-13, -9, 0, -13);
+        ctx.closePath();
+        ctx.fill();
+        ctx.stroke();
+      } else if (type === "magnet") {
+        ctx.strokeStyle = color;
+        ctx.lineWidth = 7;
+        ctx.beginPath();
+        ctx.arc(0, -1, 12, 0.12 * Math.PI, 0.88 * Math.PI);
+        ctx.stroke();
+        ctx.fillStyle = "#f8fafc";
+        ctx.fillRect(-15, 7, 8, 7);
+        ctx.fillRect(7, 7, 8, 7);
+      } else if (type === "slow") {
+        ctx.strokeStyle = color;
+        ctx.lineWidth = 3;
+        ctx.beginPath();
+        ctx.moveTo(-11, -14);
+        ctx.lineTo(11, -14);
+        ctx.lineTo(2, 0);
+        ctx.lineTo(11, 14);
+        ctx.lineTo(-11, 14);
+        ctx.lineTo(-2, 0);
+        ctx.closePath();
+        ctx.stroke();
+        ctx.fillStyle = color;
+        ctx.beginPath();
+        ctx.moveTo(-5, -6);
+        ctx.lineTo(5, -6);
+        ctx.lineTo(0, 1);
+        ctx.closePath();
+        ctx.fill();
+      } else if (type === "clear") {
+        ctx.fillStyle = color;
+        ctx.beginPath();
+        ctx.arc(0, 3, 12, 0, Math.PI * 2);
+        ctx.fill();
+        ctx.stroke();
+        ctx.strokeStyle = "#fef9c3";
+        ctx.lineWidth = 3;
+        ctx.beginPath();
+        ctx.moveTo(6, -8);
+        ctx.quadraticCurveTo(12, -18, 18, -10);
+        ctx.stroke();
+      } else if (type === "bonus") {
+        ctx.fillStyle = color;
+        ctx.beginPath();
+        ctx.arc(0, 0, 14, 0, Math.PI * 2);
+        ctx.fill();
+        ctx.stroke();
+        ctx.strokeStyle = "#fff7ed";
+        ctx.lineWidth = 3;
+        ctx.beginPath();
+        ctx.arc(0, 0, 7, 0, Math.PI * 2);
+        ctx.stroke();
+      } else {
+        ctx.fillStyle = color;
+        drawStarPath(5, 16, 7, -Math.PI / 2);
+        ctx.fill();
+        ctx.stroke();
+        ctx.strokeStyle = "#fff7ed";
+        ctx.lineWidth = 3;
+        ctx.beginPath();
+        ctx.moveTo(-8, 4);
+        ctx.lineTo(0, -7);
+        ctx.lineTo(8, 4);
+        ctx.moveTo(0, -7);
+        ctx.lineTo(0, 12);
+        ctx.stroke();
+      }
+    };
+
     const draw = () => {
       ctx.clearRect(0, 0, WIDTH, HEIGHT);
       const [topColor, midColor, bottomColor] = getBackgroundColors(best.current);
@@ -1104,6 +1238,37 @@ export default function App() {
         }
       }
 
+      if (bossArena.current) {
+        const arena = bossArena.current;
+        const floorY = arena.floorY - cameraY.current;
+        const ceilingY = arena.ceilingY - cameraY.current;
+        const floorGrad = ctx.createLinearGradient(0, floorY - 18, 0, floorY + 22);
+        floorGrad.addColorStop(0, "rgba(56,189,248,0.35)");
+        floorGrad.addColorStop(1, "rgba(15,23,42,0.95)");
+        ctx.fillStyle = floorGrad;
+        ctx.shadowColor = "#38bdf8";
+        ctx.shadowBlur = 22;
+        rounded(0, floorY, WIDTH, 24, 0);
+        ctx.shadowBlur = 0;
+
+        ctx.strokeStyle = "rgba(251,113,133,0.9)";
+        ctx.lineWidth = 4;
+        ctx.setLineDash([12, 8]);
+        ctx.beginPath();
+        ctx.moveTo(14, ceilingY);
+        ctx.lineTo(WIDTH - 14, ceilingY);
+        ctx.stroke();
+        ctx.setLineDash([]);
+
+        ctx.strokeStyle = "rgba(254,242,242,0.82)";
+        ctx.lineWidth = 2;
+        ctx.beginPath();
+        ctx.arc(WIDTH / 2, ceilingY + 22, 9, Math.PI, 0);
+        ctx.stroke();
+        ctx.fillStyle = "rgba(254,242,242,0.82)";
+        rounded(WIDTH / 2 - 11, ceilingY + 20, 22, 15, 4);
+      }
+
       platforms.current.forEach((platform) => {
         const y = platform.y - cameraY.current;
         const grad = ctx.createLinearGradient(platform.x, y, platform.x, y + 20);
@@ -1119,39 +1284,28 @@ export default function App() {
       items.current.forEach((item) => {
         const y = item.y - cameraY.current + Math.sin(time.current * 0.12 + item.spin) * 5;
         const meta = {
-          shield: ["#67e8f9", "盾"],
-          magnet: ["#f472b6", "磁"],
-          slow: ["#a78bfa", "遅"],
-          clear: ["#fb7185", "爆"],
-          bonus: ["#facc15", "+"],
-          upgrade: ["#facc15", "強"],
-        }[item.type] || ["#facc15", "?"];
+          shield: "#67e8f9",
+          magnet: "#f472b6",
+          slow: "#a78bfa",
+          clear: "#fb7185",
+          bonus: "#facc15",
+          upgrade: "#facc15",
+        }[item.type] || "#facc15";
         ctx.save();
         ctx.translate(item.x, y);
         ctx.rotate(item.spin);
-        ctx.fillStyle = meta[0];
-        ctx.shadowColor = meta[0];
-        ctx.shadowBlur = 18;
+        ctx.shadowColor = meta;
+        ctx.shadowBlur = 16;
         ctx.beginPath();
-        for (let i = 0; i < 8; i += 1) {
-          const r = i % 2 === 0 ? 18 : 10;
-          const a = -Math.PI / 2 + (Math.PI * 2 * i) / 8;
-          const x = Math.cos(a) * r;
-          const py = Math.sin(a) * r;
-          if (i === 0) ctx.moveTo(x, py);
-          else ctx.lineTo(x, py);
-        }
-        ctx.closePath();
+        ctx.fillStyle = "rgba(15,23,42,0.72)";
+        ctx.arc(0, 0, 22, 0, Math.PI * 2);
         ctx.fill();
-        ctx.fillStyle = "rgba(15,23,42,0.8)";
+        ctx.strokeStyle = meta;
+        ctx.lineWidth = 2;
+        ctx.stroke();
+        ctx.shadowBlur = 0;
         ctx.beginPath();
-        ctx.arc(0, 0, 9, 0, Math.PI * 2);
-        ctx.fill();
-        ctx.fillStyle = "white";
-        ctx.font = "bold 11px system-ui";
-        ctx.textAlign = "center";
-        ctx.textBaseline = "middle";
-        ctx.fillText(meta[1], 0, 0);
+        drawItemIcon(item.type, meta);
         ctx.restore();
       });
 
