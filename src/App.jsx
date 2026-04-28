@@ -9,6 +9,8 @@ const POWERUP_DURATION = 720;
 const BOSS_INTRO_DURATION = 96;
 const BOSS_FLOOR_INTRO_DROP = 46;
 const BOSS_EXIT_PLATFORM_DELAY = 105;
+const BOSS_BULLET_FADE_DURATION = 72;
+const BOSS_DROP_GRAVITY = 0.16;
 const STORAGE_KEY = "sky-climber-high-score";
 const NAME_KEY = "sky-climber-player-name";
 const PLAYER_ID_KEY = "sky-climber-player-id";
@@ -601,6 +603,14 @@ export default function App() {
       addText("ROUTE OPEN", WIDTH / 2, cameraY.current + 150, "#facc15");
     };
 
+    const fadeBossBullets = () => {
+      bossBullets.current.forEach((bullet) => {
+        bullet.fading = true;
+        bullet.hit = false;
+        bullet.life = Math.min(bullet.life ?? BOSS_BULLET_FADE_DURATION, BOSS_BULLET_FADE_DURATION);
+      });
+    };
+
     const spawnBoss = () => {
       const form = getBossForm(best.current);
       const rank = getBossRank(best.current);
@@ -891,14 +901,20 @@ export default function App() {
                 const dropCount = 5 + Math.floor(Math.random() * 3);
                 for (let i = 0; i < dropCount; i++) {
                   const isUpgrade = i === 0 || Math.random() < 0.45;
+                  const offset = i - (dropCount - 1) / 2;
                   items.current.push({
-                    x: clamp(enemy.x + (i - (dropCount - 1) / 2) * 32 + (Math.random() - 0.5) * 16, 36, WIDTH - 36),
-                    y: arena ? arena.floorY - 46 - Math.random() * 34 : enemy.y + 26 + Math.random() * 34,
+                    x: clamp(enemy.x + (Math.random() - 0.5) * 10, 36, WIDTH - 36),
+                    y: enemy.y,
+                    vx: offset * 0.18 + (Math.random() - 0.5) * 0.34,
+                    vy: 0.4 + Math.random() * 0.6,
+                    drop: true,
+                    settleY: arena ? arena.floorY - 48 - Math.random() * 30 : enemy.y + 120 + Math.random() * 80,
                     type: isUpgrade ? "upgrade" : POWER_TYPES[Math.floor(Math.random() * POWER_TYPES.length)],
                     spin: Math.random() * Math.PI,
                   });
                 }
 
+                fadeBossBullets();
                 applyUpgrade(UPGRADE_TYPES[Math.floor(Math.random() * UPGRADE_TYPES.length)]);
                 clearBossArena();
 
@@ -1047,7 +1063,7 @@ export default function App() {
         bullet.x += bullet.vx;
         bullet.y += bullet.vy;
         if (bullet.life != null) bullet.life -= 1;
-        if (Math.abs(bullet.x - p.x) < 18 && Math.abs(bullet.y - p.y) < 22) {
+        if (!bullet.fading && Math.abs(bullet.x - p.x) < 18 && Math.abs(bullet.y - p.y) < 22) {
           bullet.hit = true;
           if (powers.current.shield > 0) {
             powers.current.shield = 0;
@@ -1060,12 +1076,30 @@ export default function App() {
       bossBullets.current = bossBullets.current.filter((bullet) => !bullet.hit && (bullet.life == null || bullet.life > 0) && bullet.y > cameraY.current - 80 && bullet.y < cameraY.current + HEIGHT + 100 && bullet.x > -60 && bullet.x < WIDTH + 60);
 
       items.current.forEach((item) => {
-        item.spin += 0.06;
+        item.spin += item.drop ? 0.1 : 0.06;
+        if (item.drop) {
+          item.vy = Math.min(5.2, (item.vy || 0) + BOSS_DROP_GRAVITY);
+          item.x = clamp(item.x + (item.vx || 0), 24, WIDTH - 24);
+          item.y += item.vy;
+          item.vx = (item.vx || 0) * 0.992;
+          if (item.settleY != null && item.y >= item.settleY) {
+            item.y = item.settleY;
+            item.vy = 0;
+            item.vx *= 0.64;
+            if (Math.abs(item.vx) < 0.05) {
+              item.vx = 0;
+              item.drop = false;
+            }
+          }
+        }
         if (powers.current.magnet > 0) {
           const dx = p.x - item.x;
           const dy = p.y - item.y;
           const d = Math.hypot(dx, dy);
           if (d < 95 && d > 1) {
+            item.drop = false;
+            item.vx = 0;
+            item.vy = 0;
             item.x += (dx / d) * 3.2;
             item.y += (dy / d) * 3.2;
           }
@@ -1391,7 +1425,8 @@ export default function App() {
       }
 
       items.current.forEach((item) => {
-        const y = item.y - cameraY.current + Math.sin(time.current * 0.12 + item.spin) * 5;
+        const floatOffset = item.drop ? 0 : Math.sin(time.current * 0.12 + item.spin) * 5;
+        const y = item.y - cameraY.current + floatOffset;
         const meta = {
           shield: "#67e8f9",
           magnet: "#f472b6",
@@ -1431,13 +1466,17 @@ export default function App() {
 
       bossBullets.current.forEach((bullet) => {
         const y = bullet.y - cameraY.current;
+        const fadeRatio = bullet.fading ? clamp((bullet.life || 0) / BOSS_BULLET_FADE_DURATION, 0, 1) : 1;
+        const blinkOn = !bullet.fading || Math.floor((bullet.life || 0) / 5) % 2 === 0;
+        ctx.globalAlpha = blinkOn ? fadeRatio : fadeRatio * 0.16;
         ctx.fillStyle = bullet.color || "#fb7185";
         ctx.shadowColor = bullet.color || "#fb7185";
-        ctx.shadowBlur = 14;
+        ctx.shadowBlur = bullet.fading ? 8 + 8 * fadeRatio : 14;
         ctx.beginPath();
         ctx.arc(bullet.x, y, bullet.r || 4, 0, Math.PI * 2);
         ctx.fill();
         ctx.shadowBlur = 0;
+        ctx.globalAlpha = 1;
       });
 
       enemies.current.forEach((enemy) => {
