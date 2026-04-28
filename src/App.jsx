@@ -263,6 +263,7 @@ function runSelfTests() {
 export default function App() {
   const canvasRef = useRef(null);
   const keys = useRef({ left: false, right: false });
+  const touchKeys = useRef({ left: false, right: false, frames: 0 });
   const player = useRef({ x: WIDTH / 2, y: HEIGHT - 120, vx: 0, vy: 0, r: 15 });
   const platforms = useRef(makePlatforms());
   const bossArena = useRef(null);
@@ -404,6 +405,7 @@ export default function App() {
     deadRef.current = false;
     pausedRef.current = false;
     startedRef.current = true;
+    stopTouch();
     setScore(0);
     setDead(false);
     setPaused(false);
@@ -436,6 +438,7 @@ export default function App() {
     deadRef.current = false;
     keys.current.left = false;
     keys.current.right = false;
+    stopTouch();
     setPaused(false);
     setStarted(false);
     setDead(false);
@@ -714,6 +717,15 @@ export default function App() {
       p.vx = 0;
       if (keys.current.left) p.vx -= MOVE_SPEED;
       if (keys.current.right) p.vx += MOVE_SPEED;
+      const touchDirection = (touchKeys.current.right ? 1 : 0) - (touchKeys.current.left ? 1 : 0);
+      if (touchDirection !== 0) {
+        touchKeys.current.frames += 1;
+        const ramp = clamp(touchKeys.current.frames / 38, 0, 1);
+        const touchSpeed = 1.05 + ramp * 2.35;
+        p.vx = clamp(p.vx + touchDirection * touchSpeed, -MOVE_SPEED, MOVE_SPEED);
+      } else {
+        touchKeys.current.frames = 0;
+      }
       p.x += p.vx;
       p.vy += GRAVITY;
       p.y += p.vy;
@@ -1553,12 +1565,14 @@ export default function App() {
   }, [screen, playerName]);
 
   const touch = (side, isDown) => {
-    keys.current[side] = isDown;
+    touchKeys.current[side] = isDown;
+    if (!isDown && !touchKeys.current.left && !touchKeys.current.right) touchKeys.current.frames = 0;
   };
 
   const stopTouch = () => {
-    keys.current.left = false;
-    keys.current.right = false;
+    touchKeys.current.left = false;
+    touchKeys.current.right = false;
+    touchKeys.current.frames = 0;
   };
 
   return (

@@ -9,7 +9,7 @@ Vite + React のブラウザゲームです。
 GitHub Pages で他ユーザーのスコアを共有するには、Supabase に次のテーブルを作成し、Repository variables に `VITE_SUPABASE_URL` と `VITE_SUPABASE_ANON_KEY` を設定してください。
 
 ```sql
-create table public.sky_climber_scores (
+create table if not exists public.sky_climber_scores (
   month_key text not null,
   player_id text not null,
   name text not null,
@@ -19,6 +19,13 @@ create table public.sky_climber_scores (
 );
 
 alter table public.sky_climber_scores enable row level security;
+
+grant select, insert, update on public.sky_climber_scores to anon;
+grant select, insert, update on public.sky_climber_scores to authenticated;
+
+drop policy if exists "Scores are readable" on public.sky_climber_scores;
+drop policy if exists "Players can upsert scores" on public.sky_climber_scores;
+drop policy if exists "Players can update scores" on public.sky_climber_scores;
 
 create policy "Scores are readable"
 on public.sky_climber_scores
