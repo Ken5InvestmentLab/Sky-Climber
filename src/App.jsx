@@ -14,6 +14,7 @@ const BOSS_FLOOR_INTRO_DROP = 46;
 const BOSS_EXIT_PLATFORM_DELAY = 105;
 const BOSS_BULLET_FADE_DURATION = 72;
 const BOSS_DROP_GRAVITY = 0.16;
+const BOSS_DROP_SETTLE_OFFSET = 24;
 const STORAGE_KEY = "sky-climber-high-score";
 const NAME_KEY = "sky-climber-player-name";
 const PLAYER_ID_KEY = "sky-climber-player-id";
@@ -933,7 +934,7 @@ export default function App() {
                     vx: offset * 0.18 + (Math.random() - 0.5) * 0.34,
                     vy: 0.4 + Math.random() * 0.6,
                     drop: true,
-                    settleY: arena ? arena.floorY - 48 - Math.random() * 30 : enemy.y + 120 + Math.random() * 80,
+                    settleY: arena ? arena.floorY - BOSS_DROP_SETTLE_OFFSET : enemy.y + 120 + Math.random() * 80,
                     type,
                     spin: Math.random() * Math.PI,
                   });
