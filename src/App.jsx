@@ -8,7 +8,20 @@ const MOVE_SPEED = 4.2;
 const POWERUP_DURATION = 720;
 const JUMP_UPGRADE_AMOUNT = 0.9;
 const MAX_JUMP_UPGRADES = 4;
-const JUMP_UPGRADE_BOSS_RANK = 3;
+const JUMP_UPGRADE_BOSS_RANK = 2;
+const PHASE_SHIELD_BOSS_RANK = 3;
+const LASER_BOSS_RANK = 4;
+const ALL_UPGRADE_BOSS_RANK = 5;
+const AUTO_SPECIAL_REWARD_MIN_RANK = 6;
+const PHASE_SHIELD_DURATION = 900;
+const PHASE_SHIELD_AUTO_DURATION = 540;
+const PHASE_SHIELD_MAX_DURATION = 1200;
+const PHASE_SHIELD_PERIOD = 96;
+const PHASE_SHIELD_ACTIVE_FRAMES = 52;
+const PHASE_SHIELD_HIT_COST = 90;
+const LASER_BOSS_DROP_AMOUNT = 2;
+const LASER_AUTO_REWARD_AMOUNT = 1;
+const MAX_LASER_BEAMS = 6;
 const BOSS_INTRO_DURATION = 96;
 const BOSS_FLOOR_INTRO_DROP = 46;
 const BOSS_EXIT_PLATFORM_DELAY = 105;
@@ -271,6 +284,29 @@ function getJumpVelocity(jumpUpgrades = 0) {
   return JUMP - Math.min(MAX_JUMP_UPGRADES, jumpUpgrades) * JUMP_UPGRADE_AMOUNT;
 }
 
+function isPhaseShieldActive(timer = 0, frame = 0) {
+  return timer > 0 && frame % PHASE_SHIELD_PERIOD < PHASE_SHIELD_ACTIVE_FRAMES;
+}
+
+function getBossRewardDrops(rank) {
+  const drops = [];
+  if (rank === JUMP_UPGRADE_BOSS_RANK) drops.push({ type: "jump" });
+  if (rank === PHASE_SHIELD_BOSS_RANK) drops.push({ type: "phaseShield", duration: PHASE_SHIELD_DURATION });
+  if (rank === LASER_BOSS_RANK) drops.push({ type: "laser", amount: LASER_BOSS_DROP_AMOUNT });
+  if (rank >= ALL_UPGRADE_BOSS_RANK) drops.push({ type: "allUpgrade" });
+  return drops;
+}
+
+function getBossAutoReward(rank, roll = Math.random()) {
+  if (rank >= AUTO_SPECIAL_REWARD_MIN_RANK) {
+    if (roll < 0.045) return { type: "jump" };
+    if (roll < 0.09) return { type: "phaseShield", duration: PHASE_SHIELD_AUTO_DURATION };
+    if (roll < 0.135) return { type: "laser", amount: LASER_AUTO_REWARD_AMOUNT };
+    if (roll < 0.18) return { type: "allUpgrade" };
+  }
+  return { type: "upgrade" };
+}
+
 function runSelfTests() {
   console.assert(clamp(5, 0, 10) === 5, "clamp keeps value in range");
   console.assert(clamp(-1, 0, 10) === 0, "clamp applies min");
@@ -288,8 +324,14 @@ function runSelfTests() {
   console.assert(getBossType(3000) === "void", "higher bosses should change type");
   console.assert(getBossType(5000) === "eclipse", "boss roster should keep expanding past 4000m");
   console.assert(getBossHp(3000) > getBossHp(1000), "boss HP should scale upward");
-  console.assert(getBossRank(4000) === JUMP_UPGRADE_BOSS_RANK, "4000m boss should be the jump-upgrade drop boss");
+  console.assert(getBossRank(3000) === JUMP_UPGRADE_BOSS_RANK, "3000m boss should be the jump-upgrade drop boss");
   console.assert(getJumpVelocity(1) < getJumpVelocity(0), "jump upgrades should increase launch power");
+  console.assert(isPhaseShieldActive(10, 0) && !isPhaseShieldActive(10, PHASE_SHIELD_ACTIVE_FRAMES), "phase shield should blink on and off");
+  console.assert(getBossRewardDrops(getBossRank(4000)).some((drop) => drop.type === "phaseShield"), "4000m boss should drop phase shield");
+  console.assert(getBossRewardDrops(getBossRank(5000)).some((drop) => drop.type === "laser" && drop.amount === 2), "5000m boss should drop two lasers");
+  console.assert(getBossRewardDrops(getBossRank(6000)).some((drop) => drop.type === "allUpgrade"), "6000m+ bosses should drop all-weapon upgrades");
+  console.assert(getBossAutoReward(getBossRank(7000), 0.04).type === "jump", "7000m+ auto rewards can include rare jump upgrades");
+  console.assert(getBossAutoReward(getBossRank(7000), 0.05).type === "phaseShield", "7000m+ auto rewards can include rare phase shields");
   console.assert(makeDefaultPlayerName("player-abc123").startsWith("SKY"), "default player names should avoid shared YOU");
 }
 
@@ -306,8 +348,8 @@ export default function App() {
   const items = useRef([]);
   const particles = useRef([]);
   const floatingTexts = useRef([]);
-  const powers = useRef({ shield: 0, magnet: 0, slow: 0 });
-  const weapon = useRef({ rapid: 1, spread: 0, power: 1, orbit: 0, cooldown: 0, orbitAngle: 0 });
+  const powers = useRef({ shield: 0, magnet: 0, slow: 0, phaseShield: 0 });
+  const weapon = useRef({ rapid: 1, spread: 0, power: 1, orbit: 0, cooldown: 0, orbitAngle: 0, laser: 0, laserCooldown: 0 });
   const jumpUpgrades = useRef(0);
   const cameraY = useRef(0);
   const best = useRef(0);
@@ -454,17 +496,70 @@ export default function App() {
     }
   };
 
-  const applyUpgrade = (type) => {
+  const upgradeWeapon = (type) => {
     if (type === "rapid") weapon.current.rapid = Math.min(12, weapon.current.rapid + 1);
     if (type === "spread") weapon.current.spread = Math.min(12, weapon.current.spread + 1);
     if (type === "power") weapon.current.power = Math.min(8, weapon.current.power + 1);
     if (type === "orbit") weapon.current.orbit = Math.min(6, weapon.current.orbit + 1);
+  };
+
+  const applyUpgrade = (type) => {
+    upgradeWeapon(type);
     addText(`UPGRADE ${type.toUpperCase()}`, WIDTH / 2, cameraY.current + 96, "#facc15");
   };
 
   const applyJumpUpgrade = () => {
     jumpUpgrades.current = Math.min(MAX_JUMP_UPGRADES, jumpUpgrades.current + 1);
     addText(`JUMP UP ${jumpUpgrades.current}/${MAX_JUMP_UPGRADES}`, WIDTH / 2, cameraY.current + 118, "#34d399");
+  };
+
+  const applyPhaseShield = (duration = PHASE_SHIELD_DURATION) => {
+    powers.current.phaseShield = Math.min(PHASE_SHIELD_MAX_DURATION, (powers.current.phaseShield || 0) + duration);
+    addText("PHASE SHIELD", WIDTH / 2, cameraY.current + 118, "#22d3ee");
+  };
+
+  const applyLaserUpgrade = (amount = 1) => {
+    weapon.current.laser = Math.min(MAX_LASER_BEAMS, (weapon.current.laser || 0) + amount);
+    addText(`LASER x${weapon.current.laser}`, WIDTH / 2, cameraY.current + 118, "#fb7185");
+  };
+
+  const applyAllUpgrade = () => {
+    UPGRADE_TYPES.forEach(upgradeWeapon);
+    addText("ALL WEAPONS UP", WIDTH / 2, cameraY.current + 118, "#facc15");
+  };
+
+  const applyBossReward = (reward, options = {}) => {
+    if (!reward) return;
+    if (reward.type === "jump") applyJumpUpgrade();
+    else if (reward.type === "phaseShield") applyPhaseShield(reward.duration);
+    else if (reward.type === "laser") applyLaserUpgrade(reward.amount || 1);
+    else if (reward.type === "allUpgrade") applyAllUpgrade();
+    else if (reward.type === "upgrade") applyUpgrade(UPGRADE_TYPES[Math.floor(Math.random() * UPGRADE_TYPES.length)]);
+    if (options.auto && reward.type !== "upgrade") {
+      addText("RARE AUTO", WIDTH / 2, cameraY.current + 142, "#fef08a");
+    }
+  };
+
+  const absorbHit = (x, y, color = "#67e8f9", options = {}) => {
+    const phaseReady = isPhaseShieldActive(powers.current.phaseShield || 0, time.current);
+    if (options.phaseFirst && phaseReady) {
+      powers.current.phaseShield = Math.max(0, (powers.current.phaseShield || 0) - PHASE_SHIELD_HIT_COST);
+      addBurst(x, y, 20, "#22d3ee");
+      addText("PHASE GUARD", x, y - 28, "#22d3ee");
+      return "phase";
+    }
+    if (powers.current.shield > 0) {
+      powers.current.shield = 0;
+      addBurst(x, y, 18, color);
+      return "shield";
+    }
+    if (phaseReady) {
+      powers.current.phaseShield = Math.max(0, (powers.current.phaseShield || 0) - PHASE_SHIELD_HIT_COST);
+      addBurst(x, y, 20, "#22d3ee");
+      addText("PHASE GUARD", x, y - 28, "#22d3ee");
+      return "phase";
+    }
+    return "";
   };
 
   const reset = () => {
@@ -477,8 +572,8 @@ export default function App() {
     items.current = [];
     particles.current = [];
     floatingTexts.current = [];
-    powers.current = { shield: 0, magnet: 0, slow: 0 };
-    weapon.current = { rapid: 1, spread: 0, power: 1, orbit: 0, cooldown: 0, orbitAngle: 0 };
+    powers.current = { shield: 0, magnet: 0, slow: 0, phaseShield: 0 };
+    weapon.current = { rapid: 1, spread: 0, power: 1, orbit: 0, cooldown: 0, orbitAngle: 0, laser: 0, laserCooldown: 0 };
     jumpUpgrades.current = 0;
     cameraY.current = 0;
     best.current = 0;
@@ -801,6 +896,26 @@ export default function App() {
         }
       }
 
+      weapon.current.laserCooldown = Math.max(0, (weapon.current.laserCooldown || 0) - 1);
+      if ((weapon.current.laser || 0) > 0 && weapon.current.laserCooldown <= 0) {
+        const laserCount = Math.min(MAX_LASER_BEAMS, weapon.current.laser || 0);
+        weapon.current.laserCooldown = Math.max(34, 82 - laserCount * 6);
+        for (let i = 0; i < laserCount; i += 1) {
+          const side = i % 2 === 0 ? -1 : 1;
+          const spreadIndex = Math.floor(i / 2);
+          bullets.current.push({
+            x: p.x,
+            y: p.y - 18,
+            vx: side * (3.2 + spreadIndex * 0.22),
+            vy: -5.4 - spreadIndex * 0.18,
+            r: 4,
+            damage: Math.max(2, Math.ceil(weapon.current.power * 0.8)),
+            life: 180,
+            kind: "laser",
+          });
+        }
+      }
+
       if (weapon.current.orbit > 0) {
         weapon.current.orbitAngle += 0.08;
         for (let i = 0; i < weapon.current.orbit; i += 1) {
@@ -920,14 +1035,13 @@ export default function App() {
 
                 const arena = bossArena.current;
                 const dropCount = 5 + Math.floor(Math.random() * 3);
-                const dropTypes = [];
-                if (enemy.rank === JUMP_UPGRADE_BOSS_RANK) dropTypes.push("jump");
+                const dropItems = getBossRewardDrops(enemy.rank);
                 for (let i = 0; i < dropCount; i++) {
                   const isUpgrade = i === 0 || Math.random() < 0.45;
-                  dropTypes.push(isUpgrade ? "upgrade" : POWER_TYPES[Math.floor(Math.random() * POWER_TYPES.length)]);
+                  dropItems.push({ type: isUpgrade ? "upgrade" : POWER_TYPES[Math.floor(Math.random() * POWER_TYPES.length)] });
                 }
-                dropTypes.forEach((type, index) => {
-                  const offset = index - (dropTypes.length - 1) / 2;
+                dropItems.forEach((drop, index) => {
+                  const offset = index - (dropItems.length - 1) / 2;
                   items.current.push({
                     x: clamp(enemy.x + (Math.random() - 0.5) * 10, 36, WIDTH - 36),
                     y: enemy.y,
@@ -935,13 +1049,15 @@ export default function App() {
                     vy: 0.4 + Math.random() * 0.6,
                     drop: true,
                     settleY: arena ? arena.floorY - BOSS_DROP_SETTLE_OFFSET : enemy.y + 120 + Math.random() * 80,
-                    type,
+                    type: drop.type,
+                    amount: drop.amount,
+                    duration: drop.duration,
                     spin: Math.random() * Math.PI,
                   });
                 });
 
                 fadeBossBullets();
-                applyUpgrade(UPGRADE_TYPES[Math.floor(Math.random() * UPGRADE_TYPES.length)]);
+                applyBossReward(getBossAutoReward(enemy.rank), { auto: true });
                 clearBossArena();
 
                 addText("BOSS BREAK!", enemy.x, enemy.y - 40, "#facc15");
@@ -1018,10 +1134,9 @@ export default function App() {
           enemy.x = clamp(enemy.x + enemy.vx, 36, WIDTH - 36);
           enemy.y = clamp(enemy.y + enemy.vy, cameraY.current + 56, cameraY.current + HEIGHT * 0.38);
           if (Math.abs(enemy.x - p.x) < 34 + 12 * (enemy.scale || 1) && Math.abs(enemy.y - p.y) < 34 + 12 * (enemy.scale || 1)) {
-            if (powers.current.shield > 0) {
-              powers.current.shield = 0;
-              enemy.hp -= 5;
-              addBurst(p.x, p.y, 25, "#67e8f9");
+            const guard = absorbHit(p.x, p.y, "#67e8f9", { phaseFirst: true });
+            if (guard) {
+              enemy.hp -= guard === "phase" ? 2 : 5;
             } else {
               gameOver();
             }
@@ -1073,10 +1188,8 @@ export default function App() {
         enemy.x += vx;
         enemy.y += vy;
         if (Math.abs(enemy.x + enemySize / 2 - p.x) < enemySize * 0.7 && Math.abs(enemy.y + enemySize / 2 - p.y) < enemySize * 0.7) {
-          if (powers.current.shield > 0) {
-            powers.current.shield = 0;
+          if (absorbHit(p.x, p.y, enemy.color || "#67e8f9")) {
             enemy.dead = true;
-            addBurst(p.x, p.y, 18, enemy.color || "#67e8f9");
           } else {
             gameOver();
           }
@@ -1091,10 +1204,7 @@ export default function App() {
         if (bullet.life != null) bullet.life -= 1;
         if (!bullet.fading && Math.abs(bullet.x - p.x) < 18 && Math.abs(bullet.y - p.y) < 22) {
           bullet.hit = true;
-          if (powers.current.shield > 0) {
-            powers.current.shield = 0;
-            addBurst(p.x, p.y, 16, "#67e8f9");
-          } else {
+          if (!absorbHit(p.x, p.y, bullet.color || "#67e8f9", { phaseFirst: true })) {
             gameOver();
           }
         }
@@ -1138,6 +1248,12 @@ export default function App() {
             addText("+50", item.x, item.y - 20, "#facc15");
           } else if (item.type === "jump") {
             applyJumpUpgrade();
+          } else if (item.type === "phaseShield") {
+            applyPhaseShield(item.duration || PHASE_SHIELD_DURATION);
+          } else if (item.type === "laser") {
+            applyLaserUpgrade(item.amount || 1);
+          } else if (item.type === "allUpgrade") {
+            applyAllUpgrade();
           } else if (item.type === "upgrade") {
             applyUpgrade(UPGRADE_TYPES[Math.floor(Math.random() * UPGRADE_TYPES.length)]);
           } else if (item.type === "clear") {
@@ -1165,6 +1281,19 @@ export default function App() {
         bullet.x += bullet.vx || 0;
         bullet.y += bullet.vy || 0;
         if (bullet.life != null) bullet.life -= 1;
+        if (bullet.kind === "laser") {
+          const r = bullet.r || 4;
+          const top = cameraY.current + 12;
+          const bottom = cameraY.current + HEIGHT - 34;
+          if (bullet.x <= r || bullet.x >= WIDTH - r) {
+            bullet.x = clamp(bullet.x, r, WIDTH - r);
+            bullet.vx *= -1;
+          }
+          if (bullet.y <= top || bullet.y >= bottom) {
+            bullet.y = clamp(bullet.y, top, bottom);
+            bullet.vy *= -1;
+          }
+        }
       });
       bullets.current = bullets.current.filter((bullet) => !bullet.hit && bullet.y > cameraY.current - 80 && bullet.y < cameraY.current + HEIGHT + 80 && (bullet.life == null || bullet.life > 0));
       floatingTexts.current.forEach((text) => {
@@ -1384,6 +1513,50 @@ export default function App() {
         ctx.lineTo(0, -10);
         ctx.lineTo(6, -3);
         ctx.stroke();
+      } else if (type === "phaseShield") {
+        ctx.fillStyle = color;
+        ctx.beginPath();
+        ctx.moveTo(0, -15);
+        ctx.quadraticCurveTo(15, -10, 13, 2);
+        ctx.quadraticCurveTo(10, 14, 0, 18);
+        ctx.quadraticCurveTo(-10, 14, -13, 2);
+        ctx.quadraticCurveTo(-15, -10, 0, -15);
+        ctx.closePath();
+        ctx.fill();
+        ctx.stroke();
+        ctx.strokeStyle = "#ecfeff";
+        ctx.lineWidth = 2;
+        ctx.setLineDash([5, 4]);
+        ctx.beginPath();
+        ctx.arc(0, 1, 9, 0, Math.PI * 2);
+        ctx.stroke();
+        ctx.setLineDash([]);
+      } else if (type === "laser") {
+        ctx.strokeStyle = color;
+        ctx.lineWidth = 5;
+        ctx.beginPath();
+        ctx.moveTo(-15, 10);
+        ctx.lineTo(15, -12);
+        ctx.stroke();
+        ctx.strokeStyle = "#fff7ed";
+        ctx.lineWidth = 2;
+        ctx.beginPath();
+        ctx.moveTo(-8, 13);
+        ctx.lineTo(16, -15);
+        ctx.stroke();
+      } else if (type === "allUpgrade") {
+        ctx.fillStyle = color;
+        drawStarPath(8, 17, 8, -Math.PI / 2);
+        ctx.fill();
+        ctx.stroke();
+        ctx.strokeStyle = "#fff7ed";
+        ctx.lineWidth = 2;
+        ctx.beginPath();
+        ctx.moveTo(-9, 0);
+        ctx.lineTo(9, 0);
+        ctx.moveTo(0, -9);
+        ctx.lineTo(0, 9);
+        ctx.stroke();
       } else {
         ctx.fillStyle = color;
         drawStarPath(5, 16, 7, -Math.PI / 2);
@@ -1486,6 +1659,9 @@ export default function App() {
           bonus: "#facc15",
           upgrade: "#facc15",
           jump: "#34d399",
+          phaseShield: "#22d3ee",
+          laser: "#fb7185",
+          allUpgrade: "#facc15",
         }[item.type] || "#facc15";
         ctx.save();
         ctx.translate(item.x, y);
@@ -1507,12 +1683,30 @@ export default function App() {
 
       bullets.current.forEach((bullet) => {
         const y = bullet.y - cameraY.current;
-        ctx.fillStyle = bullet.kind === "orbit" ? "#4ade80" : "#fef08a";
-        ctx.shadowColor = ctx.fillStyle;
-        ctx.shadowBlur = 10;
-        ctx.beginPath();
-        ctx.arc(bullet.x, y, bullet.r || 3, 0, Math.PI * 2);
-        ctx.fill();
+        if (bullet.kind === "laser") {
+          const vx = bullet.vx || 0;
+          const vy = bullet.vy || -1;
+          ctx.strokeStyle = "#fb7185";
+          ctx.shadowColor = "#fb7185";
+          ctx.shadowBlur = 16;
+          ctx.lineWidth = 4;
+          ctx.lineCap = "round";
+          ctx.beginPath();
+          ctx.moveTo(bullet.x - vx * 3, y - vy * 3);
+          ctx.lineTo(bullet.x + vx * 3.4, y + vy * 3.4);
+          ctx.stroke();
+          ctx.fillStyle = "#fff7ed";
+          ctx.beginPath();
+          ctx.arc(bullet.x, y, 2.4, 0, Math.PI * 2);
+          ctx.fill();
+        } else {
+          ctx.fillStyle = bullet.kind === "orbit" ? "#4ade80" : "#fef08a";
+          ctx.shadowColor = ctx.fillStyle;
+          ctx.shadowBlur = 10;
+          ctx.beginPath();
+          ctx.arc(bullet.x, y, bullet.r || 3, 0, Math.PI * 2);
+          ctx.fill();
+        }
         ctx.shadowBlur = 0;
       });
 
@@ -1686,6 +1880,18 @@ export default function App() {
           ctx.arc(0, 0, 24 + index * 5, 0, Math.PI * 2);
           ctx.stroke();
         });
+      if ((powers.current.phaseShield || 0) > 0) {
+        const active = isPhaseShieldActive(powers.current.phaseShield, time.current);
+        ctx.globalAlpha = active ? 0.95 : 0.24;
+        ctx.strokeStyle = "#22d3ee";
+        ctx.lineWidth = active ? 3 : 2;
+        ctx.setLineDash(active ? [] : [7, 8]);
+        ctx.beginPath();
+        ctx.arc(0, 0, active ? 34 : 31, 0, Math.PI * 2);
+        ctx.stroke();
+        ctx.setLineDash([]);
+        ctx.globalAlpha = 1;
+      }
       ctx.restore();
 
       floatingTexts.current.forEach((text) => {
@@ -1700,16 +1906,17 @@ export default function App() {
       });
 
       ctx.fillStyle = "rgba(15,23,42,0.54)";
-      rounded(12, 12, 136, 42, 13);
+      rounded(12, 12, 154, 42, 13);
       ctx.fillStyle = "white";
       ctx.font = "bold 22px system-ui";
       ctx.fillText(`${Math.floor(best.current)}m`, 24, 39);
       ctx.fillStyle = "#fcd34d";
       ctx.font = "bold 10px system-ui";
-      ctx.fillText(`R${weapon.current.rapid} S${weapon.current.spread} P${weapon.current.power} O${weapon.current.orbit} J${jumpUpgrades.current}`, 25, 51);
+      ctx.fillText(`R${weapon.current.rapid} S${weapon.current.spread} P${weapon.current.power} O${weapon.current.orbit} J${jumpUpgrades.current} L${weapon.current.laser || 0}`, 25, 51);
 
       const hud = [
         { label: "SHIELD", desc: "1回無敵", color: "#67e8f9", timer: powers.current.shield },
+        { label: "PHASE", desc: isPhaseShieldActive(powers.current.phaseShield, time.current) ? "実体化中" : "点滅待ち", color: "#22d3ee", timer: powers.current.phaseShield },
         { label: "MAGNET", desc: "吸い寄せ", color: "#f472b6", timer: powers.current.magnet },
         { label: "SLOW", desc: "敵減速", color: "#a78bfa", timer: powers.current.slow },
       ].filter((entry) => entry.timer > 0);
