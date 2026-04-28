@@ -6,6 +6,9 @@ const GRAVITY = 0.42;
 const JUMP = -9.4;
 const MOVE_SPEED = 4.2;
 const POWERUP_DURATION = 720;
+const JUMP_UPGRADE_AMOUNT = 0.55;
+const MAX_JUMP_UPGRADES = 4;
+const JUMP_UPGRADE_BOSS_RANK = 3;
 const BOSS_INTRO_DURATION = 96;
 const BOSS_FLOOR_INTRO_DROP = 46;
 const BOSS_EXIT_PLATFORM_DELAY = 105;
@@ -263,6 +266,10 @@ function getBossHp(score) {
   return Math.floor(220 + rank * 78 + rank * rank * 34 + cycle * 420 + threat * 240);
 }
 
+function getJumpVelocity(jumpUpgrades = 0) {
+  return JUMP - Math.min(MAX_JUMP_UPGRADES, jumpUpgrades) * JUMP_UPGRADE_AMOUNT;
+}
+
 function runSelfTests() {
   console.assert(clamp(5, 0, 10) === 5, "clamp keeps value in range");
   console.assert(clamp(-1, 0, 10) === 0, "clamp applies min");
@@ -280,6 +287,8 @@ function runSelfTests() {
   console.assert(getBossType(3000) === "void", "higher bosses should change type");
   console.assert(getBossType(5000) === "eclipse", "boss roster should keep expanding past 4000m");
   console.assert(getBossHp(3000) > getBossHp(1000), "boss HP should scale upward");
+  console.assert(getBossRank(4000) === JUMP_UPGRADE_BOSS_RANK, "4000m boss should be the jump-upgrade drop boss");
+  console.assert(getJumpVelocity(1) < getJumpVelocity(0), "jump upgrades should increase launch power");
   console.assert(makeDefaultPlayerName("player-abc123").startsWith("SKY"), "default player names should avoid shared YOU");
 }
 
@@ -298,6 +307,7 @@ export default function App() {
   const floatingTexts = useRef([]);
   const powers = useRef({ shield: 0, magnet: 0, slow: 0 });
   const weapon = useRef({ rapid: 1, spread: 0, power: 1, orbit: 0, cooldown: 0, orbitAngle: 0 });
+  const jumpUpgrades = useRef(0);
   const cameraY = useRef(0);
   const best = useRef(0);
   const scoreBonus = useRef(0);
@@ -451,6 +461,11 @@ export default function App() {
     addText(`UPGRADE ${type.toUpperCase()}`, WIDTH / 2, cameraY.current + 96, "#facc15");
   };
 
+  const applyJumpUpgrade = () => {
+    jumpUpgrades.current = Math.min(MAX_JUMP_UPGRADES, jumpUpgrades.current + 1);
+    addText(`JUMP UP ${jumpUpgrades.current}/${MAX_JUMP_UPGRADES}`, WIDTH / 2, cameraY.current + 118, "#34d399");
+  };
+
   const reset = () => {
     player.current = { x: WIDTH / 2, y: HEIGHT - 120, vx: 0, vy: 0, r: 15 };
     platforms.current = makePlatforms();
@@ -463,6 +478,7 @@ export default function App() {
     floatingTexts.current = [];
     powers.current = { shield: 0, magnet: 0, slow: 0 };
     weapon.current = { rapid: 1, spread: 0, power: 1, orbit: 0, cooldown: 0, orbitAngle: 0 };
+    jumpUpgrades.current = 0;
     cameraY.current = 0;
     best.current = 0;
     scoreBonus.current = 0;
@@ -831,7 +847,7 @@ export default function App() {
         const floorY = arena.floorY + (1 - introProgress) * BOSS_FLOOR_INTRO_DROP;
         if (p.y + p.r >= floorY) {
           p.y = floorY - p.r;
-          p.vy = JUMP * 0.88;
+          p.vy = getJumpVelocity(jumpUpgrades.current) * 0.88;
           addBurst(p.x, floorY, 6, "#38bdf8");
         }
         if (introProgress > 0.55 && p.y - p.r < arena.ceilingY) {
@@ -857,7 +873,7 @@ export default function App() {
         const landed = p.vy > 0 && previousY + p.r <= platform.y && p.y + p.r >= platform.y;
         const withinX = p.x > platform.x - p.r && p.x < platform.x + platform.w + p.r;
         if (landed && withinX) {
-          p.vy = JUMP;
+          p.vy = getJumpVelocity(jumpUpgrades.current);
           addBurst(p.x, platform.y, 8, "#fef08a");
         }
       });
@@ -903,9 +919,14 @@ export default function App() {
 
                 const arena = bossArena.current;
                 const dropCount = 5 + Math.floor(Math.random() * 3);
+                const dropTypes = [];
+                if (enemy.rank === JUMP_UPGRADE_BOSS_RANK) dropTypes.push("jump");
                 for (let i = 0; i < dropCount; i++) {
                   const isUpgrade = i === 0 || Math.random() < 0.45;
-                  const offset = i - (dropCount - 1) / 2;
+                  dropTypes.push(isUpgrade ? "upgrade" : POWER_TYPES[Math.floor(Math.random() * POWER_TYPES.length)]);
+                }
+                dropTypes.forEach((type, index) => {
+                  const offset = index - (dropTypes.length - 1) / 2;
                   items.current.push({
                     x: clamp(enemy.x + (Math.random() - 0.5) * 10, 36, WIDTH - 36),
                     y: enemy.y,
@@ -913,10 +934,10 @@ export default function App() {
                     vy: 0.4 + Math.random() * 0.6,
                     drop: true,
                     settleY: arena ? arena.floorY - 48 - Math.random() * 30 : enemy.y + 120 + Math.random() * 80,
-                    type: isUpgrade ? "upgrade" : POWER_TYPES[Math.floor(Math.random() * POWER_TYPES.length)],
+                    type,
                     spin: Math.random() * Math.PI,
                   });
-                }
+                });
 
                 fadeBossBullets();
                 applyUpgrade(UPGRADE_TYPES[Math.floor(Math.random() * UPGRADE_TYPES.length)]);
@@ -1114,6 +1135,8 @@ export default function App() {
             scoreBonus.current += 50;
             best.current = Math.max(best.current, -cameraY.current / 8 + scoreBonus.current);
             addText("+50", item.x, item.y - 20, "#facc15");
+          } else if (item.type === "jump") {
+            applyJumpUpgrade();
           } else if (item.type === "upgrade") {
             applyUpgrade(UPGRADE_TYPES[Math.floor(Math.random() * UPGRADE_TYPES.length)]);
           } else if (item.type === "clear") {
@@ -1338,6 +1361,28 @@ export default function App() {
         ctx.beginPath();
         ctx.arc(0, 0, 7, 0, Math.PI * 2);
         ctx.stroke();
+      } else if (type === "jump") {
+        ctx.fillStyle = color;
+        ctx.beginPath();
+        ctx.moveTo(0, -17);
+        ctx.lineTo(14, 3);
+        ctx.lineTo(6, 3);
+        ctx.lineTo(6, 15);
+        ctx.lineTo(-6, 15);
+        ctx.lineTo(-6, 3);
+        ctx.lineTo(-14, 3);
+        ctx.closePath();
+        ctx.fill();
+        ctx.stroke();
+        ctx.strokeStyle = "#ecfeff";
+        ctx.lineWidth = 3;
+        ctx.beginPath();
+        ctx.moveTo(0, 11);
+        ctx.lineTo(0, -9);
+        ctx.moveTo(-6, -3);
+        ctx.lineTo(0, -10);
+        ctx.lineTo(6, -3);
+        ctx.stroke();
       } else {
         ctx.fillStyle = color;
         drawStarPath(5, 16, 7, -Math.PI / 2);
@@ -1439,6 +1484,7 @@ export default function App() {
           clear: "#fb7185",
           bonus: "#facc15",
           upgrade: "#facc15",
+          jump: "#34d399",
         }[item.type] || "#facc15";
         ctx.save();
         ctx.translate(item.x, y);
@@ -1659,7 +1705,7 @@ export default function App() {
       ctx.fillText(`${Math.floor(best.current)}m`, 24, 39);
       ctx.fillStyle = "#fcd34d";
       ctx.font = "bold 10px system-ui";
-      ctx.fillText(`R${weapon.current.rapid} S${weapon.current.spread} P${weapon.current.power} O${weapon.current.orbit}`, 25, 51);
+      ctx.fillText(`R${weapon.current.rapid} S${weapon.current.spread} P${weapon.current.power} O${weapon.current.orbit} J${jumpUpgrades.current}`, 25, 51);
 
       const hud = [
         { label: "SHIELD", desc: "1回無敵", color: "#67e8f9", timer: powers.current.shield },
