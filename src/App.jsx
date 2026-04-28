@@ -18,6 +18,7 @@ const LEADERBOARD_TABLE = "sky_climber_scores";
 const SUPABASE_URL = (import.meta.env.VITE_SUPABASE_URL || "").replace(/\/$/, "");
 const SUPABASE_ANON_KEY = import.meta.env.VITE_SUPABASE_ANON_KEY || "";
 const ONLINE_LEADERBOARD_ENABLED = Boolean(SUPABASE_URL && SUPABASE_ANON_KEY);
+const HOME_BACKGROUND_IMAGE = `${import.meta.env.BASE_URL}sky-climber-home-bg.png`;
 
 const ENEMY_TYPES = ["zigzag", "swoop", "seeker", "patrol", "charger", "shard", "warden"];
 const AREA_ENEMIES = {
@@ -1719,7 +1720,7 @@ export default function App() {
     <div style={styles.page}>
       <div style={styles.phoneCard}>
         {screen === "home" && (
-          <div style={styles.menuScreen}>
+          <div style={{ ...styles.menuScreen, ...styles.homeScreen }}>
             <div style={styles.logoOrb}>✦</div>
             <div style={styles.bigTitle}>SKY CLIMBER</div>
             <div style={styles.overlayText}>魔法猫を操作して、空の城を登れ。</div>
@@ -1851,6 +1852,7 @@ const styles = {
   controlButton: { height: 64, border: "1px solid rgba(216,180,254,0.45)", borderRadius: 18, color: "white", background: "linear-gradient(180deg, rgba(88,28,135,0.96), rgba(30,27,75,0.96))", fontSize: 28, fontWeight: 950, touchAction: "none", cursor: "pointer", boxShadow: "0 0 18px rgba(168,85,247,0.22)" },
   help: { marginTop: 8, textAlign: "center", color: "#94a3b8", fontSize: 11 },
   menuScreen: { minHeight: "min(720px, calc(100dvh - 44px))", display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center", gap: 14, textAlign: "center" },
+  homeScreen: { position: "relative", overflow: "hidden", borderRadius: 18, padding: "24px 14px", boxSizing: "border-box", backgroundImage: `linear-gradient(180deg, rgba(2,6,23,0.24), rgba(2,6,23,0.7)), url("${HOME_BACKGROUND_IMAGE}")`, backgroundSize: "cover", backgroundPosition: "center", boxShadow: "inset 0 0 72px rgba(2,6,23,0.42)" },
   logoOrb: { width: 86, height: 86, borderRadius: 999, display: "grid", placeItems: "center", fontSize: 44, color: "#facc15", background: "radial-gradient(circle, rgba(250,204,21,0.55), rgba(168,85,247,0.22) 55%, rgba(15,23,42,0.1))", boxShadow: "0 0 36px rgba(250,204,21,0.35)" },
   nameBox: { width: "100%", maxWidth: 260, textAlign: "left", marginTop: 8 },
   nameLabel: { display: "block", fontSize: 10, fontWeight: 900, color: "#c4b5fd", marginBottom: 6, letterSpacing: "0.08em" },
