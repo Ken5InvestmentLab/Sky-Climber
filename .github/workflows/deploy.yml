@@ -4,6 +4,7 @@ on:
   push:
     branches: [main]
 
+
 permissions:
   contents: read
   pages: write
@@ -25,12 +26,6 @@ jobs:
         uses: actions/setup-node@v4
         with:
           node-version: 20
-
-      - name: Install
-        run: npm ci
-
-      - name: Build
-        run: npm run build
 
       - name: Upload artifact
         uses: actions/upload-pages-artifact@v4
