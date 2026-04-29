@@ -1284,6 +1284,7 @@ export default function App() {
       items.current = items.current.filter((item) => !item.taken && item.y - cameraY.current < HEIGHT + 120);
 
       Object.keys(powers.current).forEach((key) => {
+        if (key === "phaseShield" && bossAlive) return;
         if (powers.current[key] > 0) powers.current[key] -= 1;
       });
       particles.current.forEach((particle) => {
