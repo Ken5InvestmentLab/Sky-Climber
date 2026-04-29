@@ -45,6 +45,12 @@ const AREA_ENEMIES = {
 };
 const POWER_TYPES = ["shield", "magnet", "slow", "clear", "bonus", "upgrade"];
 const UPGRADE_TYPES = ["rapid", "spread", "power", "orbit"];
+const WEAPON_UPGRADE_META = {
+  rapid: { label: "R", name: "RAPID", color: "#38bdf8" },
+  spread: { label: "S", name: "SPREAD", color: "#a78bfa" },
+  power: { label: "P", name: "POWER", color: "#f97316" },
+  orbit: { label: "O", name: "ORBIT", color: "#4ade80" },
+};
 const ENEMY_STATS = {
   zigzag: { hp: 1, speed: 1.08, size: 20, color: "#ff7a00", accent: "#fef08a" },
   swoop: { hp: 1, speed: 1.2, size: 22, color: "#00d4ff", accent: "#bae6fd" },
@@ -311,6 +317,10 @@ function getBossAutoReward(rank, roll = Math.random()) {
   return { type: "upgrade" };
 }
 
+function getRandomUpgradeType() {
+  return UPGRADE_TYPES[Math.floor(Math.random() * UPGRADE_TYPES.length)];
+}
+
 function runSelfTests() {
   console.assert(clamp(5, 0, 10) === 5, "clamp keeps value in range");
   console.assert(clamp(-1, 0, 10) === 0, "clamp applies min");
@@ -338,6 +348,8 @@ function runSelfTests() {
   console.assert(getBossIntroDrops(getBossRank(7000)).some((drop) => drop.type === "phaseShield"), "7000m+ bosses should start with phase shield support");
   console.assert(getBossAutoReward(getBossRank(7000), 0.04).type === "jump", "7000m+ auto rewards can include rare jump upgrades");
   console.assert(getBossAutoReward(getBossRank(7000), 0.05).type === "phaseShield", "7000m+ auto rewards can include rare phase shields");
+  console.assert(UPGRADE_TYPES.every((type) => WEAPON_UPGRADE_META[type]?.label), "weapon upgrade items should have visible labels");
+  console.assert(UPGRADE_TYPES.includes(getRandomUpgradeType()), "random weapon upgrades should use known types");
   console.assert(makeDefaultPlayerName("player-abc123").startsWith("SKY"), "default player names should avoid shared YOU");
 }
 
@@ -540,7 +552,7 @@ export default function App() {
     else if (reward.type === "phaseShield") applyPhaseShield(reward.duration);
     else if (reward.type === "laser") applyLaserUpgrade(reward.amount || 1);
     else if (reward.type === "allUpgrade") applyAllUpgrade();
-    else if (reward.type === "upgrade") applyUpgrade(UPGRADE_TYPES[Math.floor(Math.random() * UPGRADE_TYPES.length)]);
+    else if (reward.type === "upgrade") applyUpgrade(reward.upgradeType || getRandomUpgradeType());
     if (options.auto && reward.type !== "upgrade") {
       addText("RARE AUTO", WIDTH / 2, cameraY.current + 142, "#fef08a");
     }
@@ -745,6 +757,7 @@ export default function App() {
           type: drop.type,
           amount: drop.amount,
           duration: drop.duration,
+          upgradeType: drop.upgradeType || (drop.type === "upgrade" ? getRandomUpgradeType() : undefined),
           spin: Math.random() * Math.PI,
         });
       });
@@ -1041,7 +1054,7 @@ export default function App() {
       }
       if (!bossAlive && !bossExitActive && items.current.length < 2 && Math.random() < upgradeRate) {
         const spot = findReachableSpot(platforms.current, p.y, p.x);
-        items.current.push({ x: spot.x, y: spot.y, type: "upgrade", spin: 0 });
+        items.current.push({ x: spot.x, y: spot.y, type: "upgrade", upgradeType: getRandomUpgradeType(), spin: 0 });
       }
 
       enemies.current.forEach((enemy) => {
@@ -1270,7 +1283,7 @@ export default function App() {
           } else if (item.type === "allUpgrade") {
             applyAllUpgrade();
           } else if (item.type === "upgrade") {
-            applyUpgrade(UPGRADE_TYPES[Math.floor(Math.random() * UPGRADE_TYPES.length)]);
+            applyUpgrade(item.upgradeType || getRandomUpgradeType());
           } else if (item.type === "clear") {
             enemies.current = enemies.current.filter((enemy) => enemy.boss);
             addText("CLEAR!", item.x, item.y - 20, "#fb7185");
@@ -1439,11 +1452,12 @@ export default function App() {
       }
     };
 
-    const drawItemIcon = (type, color) => {
+    const drawItemIcon = (type, color, upgradeType = "rapid") => {
       ctx.strokeStyle = "rgba(15,23,42,0.9)";
       ctx.lineWidth = 3;
       ctx.lineCap = "round";
       ctx.lineJoin = "round";
+      const upgradeMeta = WEAPON_UPGRADE_META[upgradeType] || WEAPON_UPGRADE_META.rapid;
 
       if (type === "shield") {
         ctx.fillStyle = color;
@@ -1573,19 +1587,40 @@ export default function App() {
         ctx.moveTo(0, -9);
         ctx.lineTo(0, 9);
         ctx.stroke();
-      } else {
-        ctx.fillStyle = color;
+      } else if (type === "upgrade") {
+        ctx.fillStyle = upgradeMeta.color;
         drawStarPath(5, 16, 7, -Math.PI / 2);
         ctx.fill();
         ctx.stroke();
         ctx.strokeStyle = "#fff7ed";
-        ctx.lineWidth = 3;
+        ctx.lineWidth = 2.4;
         ctx.beginPath();
-        ctx.moveTo(-8, 4);
-        ctx.lineTo(0, -7);
-        ctx.lineTo(8, 4);
-        ctx.moveTo(0, -7);
-        ctx.lineTo(0, 12);
+        if (upgradeType === "rapid") {
+          ctx.moveTo(-11, 8);
+          ctx.lineTo(-1, -10);
+          ctx.lineTo(-3, -1);
+          ctx.lineTo(10, -11);
+          ctx.moveTo(2, -1);
+          ctx.lineTo(12, -1);
+        } else if (upgradeType === "spread") {
+          ctx.moveTo(0, -13);
+          ctx.lineTo(0, 10);
+          ctx.moveTo(0, -3);
+          ctx.lineTo(-11, 8);
+          ctx.moveTo(0, -3);
+          ctx.lineTo(11, 8);
+        } else if (upgradeType === "power") {
+          ctx.moveTo(-9, 8);
+          ctx.lineTo(0, -12);
+          ctx.lineTo(9, 8);
+          ctx.moveTo(-5, 2);
+          ctx.lineTo(5, 2);
+        } else {
+          ctx.arc(0, 0, 10, -0.15 * Math.PI, 1.5 * Math.PI);
+          ctx.moveTo(8, -8);
+          ctx.lineTo(14, -7);
+          ctx.lineTo(10, -2);
+        }
         ctx.stroke();
       }
     };
@@ -1673,12 +1708,13 @@ export default function App() {
           slow: "#a78bfa",
           clear: "#fb7185",
           bonus: "#facc15",
-          upgrade: "#facc15",
+          upgrade: WEAPON_UPGRADE_META[item.upgradeType]?.color || "#facc15",
           jump: "#34d399",
           phaseShield: "#22d3ee",
           laser: "#fb7185",
           allUpgrade: "#facc15",
         }[item.type] || "#facc15";
+        const upgradeMeta = item.type === "upgrade" ? (WEAPON_UPGRADE_META[item.upgradeType] || WEAPON_UPGRADE_META.rapid) : null;
         ctx.save();
         ctx.translate(item.x, y);
         ctx.rotate(item.spin);
@@ -1693,8 +1729,25 @@ export default function App() {
         ctx.stroke();
         ctx.shadowBlur = 0;
         ctx.beginPath();
-        drawItemIcon(item.type, meta);
+        drawItemIcon(item.type, meta, item.upgradeType);
         ctx.restore();
+        if (upgradeMeta) {
+          ctx.save();
+          ctx.translate(item.x, y);
+          ctx.fillStyle = "rgba(15,23,42,0.92)";
+          rounded(-13, 14, 26, 14, 5);
+          ctx.strokeStyle = upgradeMeta.color;
+          ctx.lineWidth = 1.4;
+          ctx.stroke();
+          ctx.fillStyle = "#fff7ed";
+          ctx.font = "bold 10px system-ui";
+          ctx.textAlign = "center";
+          ctx.textBaseline = "middle";
+          ctx.fillText(upgradeMeta.label, 0, 21);
+          ctx.textAlign = "left";
+          ctx.textBaseline = "alphabetic";
+          ctx.restore();
+        }
       });
 
       bullets.current.forEach((bullet) => {
