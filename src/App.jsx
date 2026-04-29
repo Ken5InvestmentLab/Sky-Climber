@@ -298,7 +298,7 @@ function getBossRewardDrops(rank) {
 }
 
 function getBossIntroDrops(rank) {
-  return rank === PHASE_SHIELD_BOSS_RANK
+  return rank === PHASE_SHIELD_BOSS_RANK || rank >= AUTO_SPECIAL_REWARD_MIN_RANK
     ? [{ type: "phaseShield", duration: PHASE_SHIELD_DURATION }]
     : [];
 }
@@ -337,6 +337,7 @@ function runSelfTests() {
   console.assert(getBossIntroDrops(getBossRank(5000)).some((drop) => drop.type === "phaseShield"), "5000m boss should drop phase shield at battle start");
   console.assert(getBossRewardDrops(getBossRank(5000)).some((drop) => drop.type === "laser" && drop.amount === 2), "5000m boss should drop two lasers");
   console.assert(getBossRewardDrops(getBossRank(6000)).some((drop) => drop.type === "allUpgrade"), "6000m+ bosses should drop all-weapon upgrades");
+  console.assert(getBossIntroDrops(getBossRank(7000)).some((drop) => drop.type === "phaseShield"), "7000m+ bosses should start with phase shield support");
   console.assert(getBossAutoReward(getBossRank(7000), 0.04).type === "jump", "7000m+ auto rewards can include rare jump upgrades");
   console.assert(getBossAutoReward(getBossRank(7000), 0.05).type === "phaseShield", "7000m+ auto rewards can include rare phase shields");
   console.assert(makeDefaultPlayerName("player-abc123").startsWith("SKY"), "default player names should avoid shared YOU");
