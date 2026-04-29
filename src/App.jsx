@@ -6,7 +6,7 @@ const GRAVITY = 0.42;
 const JUMP = -9.4;
 const MOVE_SPEED = 4.2;
 const POWERUP_DURATION = 720;
-const JUMP_UPGRADE_AMOUNT = 0.9;
+const JUMP_UPGRADE_AMOUNT = 0.8;
 const MAX_JUMP_UPGRADES = 4;
 const JUMP_UPGRADE_BOSS_RANK = 2;
 const SECOND_JUMP_UPGRADE_BOSS_RANK = 3;
@@ -17,8 +17,6 @@ const AUTO_SPECIAL_REWARD_MIN_RANK = 6;
 const PHASE_SHIELD_DURATION = 900;
 const PHASE_SHIELD_AUTO_DURATION = 540;
 const PHASE_SHIELD_MAX_DURATION = 1200;
-const PHASE_SHIELD_PERIOD = 96;
-const PHASE_SHIELD_ACTIVE_FRAMES = 52;
 const PHASE_SHIELD_HIT_COST = 90;
 const LASER_BOSS_DROP_AMOUNT = 2;
 const LASER_AUTO_REWARD_AMOUNT = 1;
@@ -285,8 +283,8 @@ function getJumpVelocity(jumpUpgrades = 0) {
   return JUMP - Math.min(MAX_JUMP_UPGRADES, jumpUpgrades) * JUMP_UPGRADE_AMOUNT;
 }
 
-function isPhaseShieldActive(timer = 0, frame = 0) {
-  return timer > 0 && frame % PHASE_SHIELD_PERIOD < PHASE_SHIELD_ACTIVE_FRAMES;
+function isPhaseShieldActive(timer = 0) {
+  return timer > 0;
 }
 
 function getBossRewardDrops(rank) {
@@ -332,7 +330,7 @@ function runSelfTests() {
   console.assert(getBossHp(3000) > getBossHp(1000), "boss HP should scale upward");
   console.assert(getBossRank(3000) === JUMP_UPGRADE_BOSS_RANK, "3000m boss should be the jump-upgrade drop boss");
   console.assert(getJumpVelocity(1) < getJumpVelocity(0), "jump upgrades should increase launch power");
-  console.assert(isPhaseShieldActive(10, 0) && !isPhaseShieldActive(10, PHASE_SHIELD_ACTIVE_FRAMES), "phase shield should blink on and off");
+  console.assert(isPhaseShieldActive(10) && !isPhaseShieldActive(0), "phase shield should stay active while charged");
   console.assert(getBossRewardDrops(getBossRank(4000)).some((drop) => drop.type === "jump"), "4000m boss should also drop a jump upgrade");
   console.assert(getBossIntroDrops(getBossRank(5000)).some((drop) => drop.type === "phaseShield"), "5000m boss should drop phase shield at battle start");
   console.assert(getBossRewardDrops(getBossRank(5000)).some((drop) => drop.type === "laser" && drop.amount === 2), "5000m boss should drop two lasers");
@@ -549,7 +547,7 @@ export default function App() {
   };
 
   const absorbHit = (x, y, color = "#67e8f9", options = {}) => {
-    const phaseReady = isPhaseShieldActive(powers.current.phaseShield || 0, time.current);
+    const phaseReady = isPhaseShieldActive(powers.current.phaseShield || 0);
     if (options.phaseFirst && phaseReady) {
       powers.current.phaseShield = Math.max(0, (powers.current.phaseShield || 0) - PHASE_SHIELD_HIT_COST);
       addBurst(x, y, 20, "#22d3ee");
@@ -1899,15 +1897,12 @@ export default function App() {
           ctx.stroke();
         });
       if ((powers.current.phaseShield || 0) > 0) {
-        const active = isPhaseShieldActive(powers.current.phaseShield, time.current);
-        ctx.globalAlpha = active ? 0.95 : 0.24;
+        ctx.globalAlpha = 0.9;
         ctx.strokeStyle = "#22d3ee";
-        ctx.lineWidth = active ? 3 : 2;
-        ctx.setLineDash(active ? [] : [7, 8]);
+        ctx.lineWidth = 3;
         ctx.beginPath();
-        ctx.arc(0, 0, active ? 34 : 31, 0, Math.PI * 2);
+        ctx.arc(0, 0, 34, 0, Math.PI * 2);
         ctx.stroke();
-        ctx.setLineDash([]);
         ctx.globalAlpha = 1;
       }
       ctx.restore();
@@ -1934,7 +1929,7 @@ export default function App() {
 
       const hud = [
         { label: "SHIELD", desc: "1回無敵", color: "#67e8f9", timer: powers.current.shield },
-        { label: "PHASE", desc: isPhaseShieldActive(powers.current.phaseShield, time.current) ? "実体化中" : "点滅待ち", color: "#22d3ee", timer: powers.current.phaseShield },
+        { label: "PHASE", desc: "ガード中", color: "#22d3ee", timer: powers.current.phaseShield },
         { label: "MAGNET", desc: "吸い寄せ", color: "#f472b6", timer: powers.current.magnet },
         { label: "SLOW", desc: "敵減速", color: "#a78bfa", timer: powers.current.slow },
       ].filter((entry) => entry.timer > 0);
