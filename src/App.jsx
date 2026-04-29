@@ -27,6 +27,10 @@ const BOSS_EXIT_PLATFORM_DELAY = 105;
 const BOSS_BULLET_FADE_DURATION = 72;
 const BOSS_DROP_GRAVITY = 0.16;
 const BOSS_DROP_SETTLE_OFFSET = 0;
+const FIRST_PROGRESS_ITEM_SCORE = 60;
+const ITEM_PROGRESS_INTERVAL = 115;
+const ITEM_PROGRESS_JITTER = 65;
+const PROGRESS_UPGRADE_CHANCE = 0.28;
 const STORAGE_KEY = "sky-climber-high-score";
 const NAME_KEY = "sky-climber-player-name";
 const PLAYER_ID_KEY = "sky-climber-player-id";
@@ -44,6 +48,7 @@ const AREA_ENEMIES = {
   dream: ["seeker", "swoop", "patrol", "zigzag", "charger", "shard", "warden"],
 };
 const POWER_TYPES = ["shield", "magnet", "slow", "clear", "bonus", "upgrade"];
+const ASSIST_POWER_TYPES = POWER_TYPES.filter((type) => type !== "upgrade");
 const UPGRADE_TYPES = ["rapid", "spread", "power", "orbit"];
 const WEAPON_UPGRADE_META = {
   rapid: { label: "R", name: "RAPID", color: "#38bdf8" },
@@ -289,6 +294,18 @@ function getJumpVelocity(jumpUpgrades = 0) {
   return JUMP - Math.min(MAX_JUMP_UPGRADES, jumpUpgrades) * JUMP_UPGRADE_AMOUNT;
 }
 
+function getClimbScore(cameraY) {
+  return Math.max(0, -cameraY / 8);
+}
+
+function getNextProgressItemScore(score, roll = Math.random()) {
+  return Math.floor(score + ITEM_PROGRESS_INTERVAL + roll * ITEM_PROGRESS_JITTER);
+}
+
+function canSpawnProgressItem(climbScore, nextItemScore, itemCount, bossAlive, bossExitActive) {
+  return !bossAlive && !bossExitActive && itemCount < 2 && climbScore >= nextItemScore;
+}
+
 function isPhaseShieldActive(timer = 0) {
   return timer > 0;
 }
@@ -351,6 +368,11 @@ function runSelfTests() {
   console.assert(UPGRADE_TYPES.every((type) => WEAPON_UPGRADE_META[type]?.label), "weapon upgrade items should have visible labels");
   console.assert(UPGRADE_TYPES.includes(getRandomUpgradeType()), "random weapon upgrades should use known types");
   console.assert(makeDefaultPlayerName("player-abc123").startsWith("SKY"), "default player names should avoid shared YOU");
+  console.assert(getClimbScore(-480) === 60, "climb score should be based on upward camera progress only");
+  console.assert(getNextProgressItemScore(60, 0) > 60, "next item spawn should require more climbing");
+  console.assert(!canSpawnProgressItem(59, 60, 0, false, false), "progress items should not spawn while waiting below the next height gate");
+  console.assert(canSpawnProgressItem(60, 60, 0, false, false), "progress items should unlock after climbing to the next height gate");
+  console.assert(!canSpawnProgressItem(120, 60, 0, true, false), "progress items should pause during boss fights");
 }
 
 export default function App() {
@@ -374,6 +396,7 @@ export default function App() {
   const scoreBonus = useRef(0);
   const nextBoss = useRef(1000);
   const nextToast = useRef(500);
+  const nextProgressItem = useRef(FIRST_PROGRESS_ITEM_SCORE);
   const time = useRef(0);
   const running = useRef(false);
   const deadRef = useRef(false);
@@ -598,6 +621,7 @@ export default function App() {
     scoreBonus.current = 0;
     nextBoss.current = 1000;
     nextToast.current = 500;
+    nextProgressItem.current = FIRST_PROGRESS_ITEM_SCORE;
     running.current = true;
     deadRef.current = false;
     pausedRef.current = false;
@@ -1046,15 +1070,17 @@ export default function App() {
         spawnEnemy();
       }
 
-      const powerRate = 0.0007 + difficulty * 0.0004;
-      const upgradeRate = 0.00035 + difficulty * 0.0003;
-      if (!bossAlive && !bossExitActive && items.current.length < 2 && Math.random() < powerRate) {
+      const climbScore = getClimbScore(cameraY.current);
+      if (canSpawnProgressItem(climbScore, nextProgressItem.current, items.current.length, bossAlive, bossExitActive)) {
         const spot = findReachableSpot(platforms.current, p.y, p.x);
-        items.current.push({ x: spot.x, y: spot.y, type: POWER_TYPES[Math.floor(Math.random() * POWER_TYPES.length)], spin: 0 });
-      }
-      if (!bossAlive && !bossExitActive && items.current.length < 2 && Math.random() < upgradeRate) {
-        const spot = findReachableSpot(platforms.current, p.y, p.x);
-        items.current.push({ x: spot.x, y: spot.y, type: "upgrade", upgradeType: getRandomUpgradeType(), spin: 0 });
+        const upgradeChance = PROGRESS_UPGRADE_CHANCE + difficulty * 0.16;
+        if (Math.random() < upgradeChance) {
+          items.current.push({ x: spot.x, y: spot.y, type: "upgrade", upgradeType: getRandomUpgradeType(), spin: 0 });
+        } else {
+          const type = ASSIST_POWER_TYPES[Math.floor(Math.random() * ASSIST_POWER_TYPES.length)];
+          items.current.push({ x: spot.x, y: spot.y, type, spin: 0 });
+        }
+        nextProgressItem.current = getNextProgressItemScore(climbScore);
       }
 
       enemies.current.forEach((enemy) => {
