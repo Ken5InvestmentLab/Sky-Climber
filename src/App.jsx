@@ -21,6 +21,8 @@ const PHASE_SHIELD_HIT_COST = 90;
 const LASER_BOSS_DROP_AMOUNT = 2;
 const LASER_AUTO_REWARD_AMOUNT = 1;
 const MAX_LASER_BEAMS = 6;
+const LATE_BOSS_RELIEF_RANK = 6;
+const DEEP_BOSS_RELIEF_RANK = 7;
 const BOSS_INTRO_DURATION = 96;
 const BOSS_FLOOR_INTRO_DROP = 46;
 const BOSS_EXIT_PLATFORM_DELAY = 105;
@@ -283,11 +285,36 @@ function getBossType(score) {
   return getBossForm(score).type;
 }
 
+function getBossTuning(rank) {
+  if (rank >= DEEP_BOSS_RELIEF_RANK) {
+    return { hpMultiplier: 0.76, threatMultiplier: 0.72, spinCap: 30, ringCap: 18, phase2ShotFloor: 24 };
+  }
+  if (rank >= LATE_BOSS_RELIEF_RANK) {
+    return { hpMultiplier: 0.86, threatMultiplier: 0.84, spinCap: 32, ringCap: 22, phase2ShotFloor: 26 };
+  }
+  return { hpMultiplier: 1, threatMultiplier: 1, spinCap: 38, ringCap: 32, phase2ShotFloor: 14 };
+}
+
+function getBossThreat(score, rank = getBossRank(score)) {
+  return getThreat(score) * getBossTuning(rank).threatMultiplier;
+}
+
+function bossUsesRingPattern(type) {
+  return type === "eclipse" || type === "seraph" || type === "hydra";
+}
+
+function getBossRingCount(rank, threat, type, phase2) {
+  if (!bossUsesRingPattern(type) || (!phase2 && threat <= 1.6)) return 0;
+  return Math.min(getBossTuning(rank).ringCap, Math.floor(10 + rank + threat * 2));
+}
+
 function getBossHp(score) {
   const rank = getBossRank(score);
   const cycle = getBossCycle(score);
-  const threat = getThreat(score);
-  return Math.floor(220 + rank * 78 + rank * rank * 34 + cycle * 420 + threat * 240);
+  const tuning = getBossTuning(rank);
+  const threat = getBossThreat(score, rank);
+  const baseHp = 220 + rank * 78 + rank * rank * 34 + cycle * 420 + threat * 240;
+  return Math.floor(baseHp * tuning.hpMultiplier);
 }
 
 function getJumpVelocity(jumpUpgrades = 0) {
@@ -319,9 +346,12 @@ function getBossRewardDrops(rank) {
 }
 
 function getBossIntroDrops(rank) {
-  return rank === PHASE_SHIELD_BOSS_RANK || rank >= AUTO_SPECIAL_REWARD_MIN_RANK
-    ? [{ type: "phaseShield", duration: PHASE_SHIELD_DURATION }]
-    : [];
+  const drops = [];
+  if (rank === PHASE_SHIELD_BOSS_RANK || rank >= AUTO_SPECIAL_REWARD_MIN_RANK) {
+    drops.push({ type: "phaseShield", duration: PHASE_SHIELD_DURATION });
+  }
+  if (rank === DEEP_BOSS_RELIEF_RANK) drops.push({ type: "laser", amount: 1 });
+  return drops;
 }
 
 function getBossAutoReward(rank, roll = Math.random()) {
@@ -363,6 +393,10 @@ function runSelfTests() {
   console.assert(getBossRewardDrops(getBossRank(5000)).some((drop) => drop.type === "laser" && drop.amount === 2), "5000m boss should drop two lasers");
   console.assert(getBossRewardDrops(getBossRank(6000)).some((drop) => drop.type === "allUpgrade"), "6000m+ bosses should drop all-weapon upgrades");
   console.assert(getBossIntroDrops(getBossRank(7000)).some((drop) => drop.type === "phaseShield"), "7000m+ bosses should start with phase shield support");
+  console.assert(getBossHp(8000) < 4000, "8000m boss HP should be softened below the old spike");
+  console.assert(getBossHp(7000) < getBossHp(8000) && getBossHp(8000) < getBossHp(9000), "late boss HP should still climb smoothly");
+  console.assert(getBossIntroDrops(getBossRank(8000)).some((drop) => drop.type === "laser" && drop.amount === 1), "8000m boss should start with laser support");
+  console.assert(getBossRingCount(getBossRank(8000), getBossThreat(8000), getBossType(8000), true) === 0, "8000m core boss should not use ring bullets");
   console.assert(getBossAutoReward(getBossRank(7000), 0.04).type === "jump", "7000m+ auto rewards can include rare jump upgrades");
   console.assert(getBossAutoReward(getBossRank(7000), 0.05).type === "phaseShield", "7000m+ auto rewards can include rare phase shields");
   console.assert(UPGRADE_TYPES.every((type) => WEAPON_UPGRADE_META[type]?.label), "weapon upgrade items should have visible labels");
@@ -791,7 +825,7 @@ export default function App() {
       const form = getBossForm(best.current);
       const rank = getBossRank(best.current);
       const cycle = getBossCycle(best.current);
-      const threat = getThreat(best.current);
+      const threat = getBossThreat(best.current, rank);
       const type = form.type;
       const hp = getBossHp(best.current);
       const arenaCameraY = cameraY.current;
@@ -826,14 +860,15 @@ export default function App() {
       const introDrops = getBossIntroDrops(rank);
       if (introDrops.length > 0) {
         dropBossItems(introDrops, WIDTH / 2, arenaCameraY + 94, bossArena.current, 0);
-        addText("PHASE SHIELD DROP", WIDTH / 2, cameraY.current + 154, form.accent);
+        addText(introDrops.some((drop) => drop.type === "laser") ? "SUPPORT DROP" : "PHASE SHIELD DROP", WIDTH / 2, cameraY.current + 154, form.accent);
       }
       addText(`${form.name} Lv.${rank + 1}${cycle > 0 ? `+${cycle}` : ""}`, WIDTH / 2, cameraY.current + 120, form.accent);
     };
 
     const fireBossPattern = (enemy, p) => {
       const rank = enemy.rank ?? getBossRank(best.current);
-      const threat = enemy.threat ?? getThreat(best.current);
+      const threat = enemy.threat ?? getBossThreat(best.current, rank);
+      const tuning = getBossTuning(rank);
       const form = enemy.form || getBossFormByType(enemy.type);
       const phase2 = enemy.hp <= enemy.maxHp * 0.5;
 
@@ -856,7 +891,7 @@ export default function App() {
         speed = 2.8 + rank * 0.18 + threat * 0.26;
 
         // 回転弾追加
-        const spinCount = Math.min(38, Math.floor(8 + rank * 1.8 + threat * 2.5));
+        const spinCount = Math.min(tuning.spinCap, Math.floor(8 + rank * 1.8 + threat * 2.5));
         for (let i = 0; i < spinCount; i++) {
           const angle = enemy.t * 0.1 + (Math.PI * 2 * i) / spinCount;
           bossBullets.current.push({
@@ -885,8 +920,8 @@ export default function App() {
         });
       }
 
-      if ((enemy.type === "eclipse" || enemy.type === "seraph" || enemy.type === "hydra") && (phase2 || threat > 1.6)) {
-        const ringCount = Math.min(32, Math.floor(10 + rank + threat * 2));
+      const ringCount = getBossRingCount(rank, threat, enemy.type, phase2);
+      if (ringCount > 0) {
         for (let i = 0; i < ringCount; i += 1) {
           const angle = enemy.t * 0.045 + (Math.PI * 2 * i) / ringCount;
           bossBullets.current.push({
@@ -901,7 +936,7 @@ export default function App() {
       }
 
       enemy.shotTimer = phase2
-        ? Math.max(14, Math.floor(76 - rank * 4.4 - threat * 4.2))
+        ? Math.max(tuning.phase2ShotFloor, Math.floor(76 - rank * 4.4 - threat * 4.2))
         : Math.max(24, Math.floor(112 - rank * 5.3 - threat * 3.8));
     };
 
@@ -1136,7 +1171,7 @@ export default function App() {
           enemy.t += 1;
           const phase2 = enemy.hp <= enemy.maxHp * 0.45;
           const rank = enemy.rank ?? getBossRank(best.current);
-          const threat = enemy.threat ?? getThreat(best.current);
+          const threat = enemy.threat ?? getBossThreat(best.current, rank);
           const form = enemy.form || getBossFormByType(enemy.type);
           const arena = bossArena.current;
           if (arena && (arena.intro || 0) > 0) {

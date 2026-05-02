@@ -1,0 +1,28 @@
+{
+  "name": "Sky Climber",
+  "short_name": "Sky Climber",
+  "description": "魔法猫を操作して、空の城を駆け上がれ。",
+  "start_url": "/Sky-Climber/",
+  "scope": "/Sky-Climber/",
+  "display": "standalone",
+  "background_color": "#020617",
+  "theme_color": "#1e1b4b",
+  "icons": [
+    {
+      "src": "/Sky-Climber/app-icon-192.png",
+      "sizes": "192x192",
+      "type": "image/png"
+    },
+    {
+      "src": "/Sky-Climber/app-icon-512.png",
+      "sizes": "512x512",
+      "type": "image/png"
+    },
+    {
+      "src": "/Sky-Climber/app-icon-maskable-512.png",
+      "sizes": "512x512",
+      "type": "image/png",
+      "purpose": "maskable"
+    }
+  ]
+}
