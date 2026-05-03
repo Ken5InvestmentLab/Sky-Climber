@@ -137,6 +137,14 @@ function getMonthKey(date = new Date()) {
   return `${year}-${String(month).padStart(2, "0")}`;
 }
 
+function getHighScoreStorageKey(monthKey = getMonthKey()) {
+  return `${STORAGE_KEY}:${monthKey}`;
+}
+
+function getStoredHighScore(monthKey = getMonthKey()) {
+  return Number(safeGet(getHighScoreStorageKey(monthKey), "0")) || 0;
+}
+
 function getMonthLabel(date = new Date()) {
   const { year, month } = getJstDateParts(date);
   return `${year}年${month}月`;
@@ -376,6 +384,10 @@ function runSelfTests() {
   console.assert(makePlatforms().length > 1, "platforms are generated");
   console.assert(makeLeaderboard([], 999, "YOU", "me").length === 1, "leaderboard includes the current player");
   console.assert(getMonthKey(new Date("2026-04-30T18:00:00Z")) === "2026-05", "monthly leaderboard uses JST month boundaries");
+  console.assert(
+    getHighScoreStorageKey(getMonthKey(new Date("2026-04-30T14:59:00Z"))) !== getHighScoreStorageKey(getMonthKey(new Date("2026-04-30T15:00:00Z"))),
+    "monthly high score storage key resets at JST month boundaries"
+  );
   console.assert(Array.isArray(AREA_ENEMIES.night), "AREA_ENEMIES.night exists");
   console.assert(Array.isArray(AREA_ENEMIES[getArea(3500)]), "AREA_ENEMIES supports score-derived areas");
   console.assert(typeof POWERUP_DURATION === "number" && POWERUP_DURATION > 0, "POWERUP_DURATION is defined");
@@ -436,12 +448,14 @@ export default function App() {
   const deadRef = useRef(false);
   const pausedRef = useRef(false);
   const startedRef = useRef(false);
-  const highScoreRef = useRef(Number(safeGet(STORAGE_KEY, "0")) || 0);
+  const currentMonthKeyRef = useRef(getMonthKey());
+  const highScoreRef = useRef(getStoredHighScore(currentMonthKeyRef.current));
   const playerIdRef = useRef(getPlayerId());
 
   const [screen, setScreen] = useState("home");
   const [score, setScore] = useState(0);
   const [highScore, setHighScore] = useState(highScoreRef.current);
+  const [, setCurrentMonthKey] = useState(currentMonthKeyRef.current);
   const [dead, setDead] = useState(false);
   const [paused, setPaused] = useState(false);
   const [started, setStarted] = useState(false);
@@ -472,10 +486,32 @@ export default function App() {
     }
   };
 
+  const syncMonthlyHighScore = () => {
+    const monthKey = getMonthKey();
+    if (monthKey === currentMonthKeyRef.current) return highScoreRef.current;
+
+    currentMonthKeyRef.current = monthKey;
+    const nextHigh = getStoredHighScore(monthKey);
+    highScoreRef.current = nextHigh;
+    setCurrentMonthKey(monthKey);
+    setHighScore(nextHigh);
+    setLeaderboard(makeLeaderboard([], nextHigh, playerName, playerIdRef.current));
+    return nextHigh;
+  };
+
+  const saveMonthlyHighScore = (scoreToSave) => {
+    const monthlyHigh = syncMonthlyHighScore();
+    const nextHigh = Math.max(monthlyHigh, Number(scoreToSave) || 0);
+    highScoreRef.current = nextHigh;
+    safeSet(getHighScoreStorageKey(currentMonthKeyRef.current), nextHigh);
+    setHighScore(nextHigh);
+    return nextHigh;
+  };
+
   const refreshLeaderboard = async (scoreToSave = null, nameOverride = playerName, options = {}) => {
     const { checkName = scoreToSave != null } = options;
     const displayName = normalizePlayerName(nameOverride);
-    const localScore = Math.max(highScoreRef.current, Number(scoreToSave) || 0);
+    const localScore = Math.max(syncMonthlyHighScore(), Number(scoreToSave) || 0);
     const playerId = playerIdRef.current;
 
     if (!ONLINE_LEADERBOARD_ENABLED) {
@@ -491,7 +527,7 @@ export default function App() {
       Authorization: `Bearer ${SUPABASE_ANON_KEY}`,
       "Content-Type": "application/json",
     };
-    const monthKey = getMonthKey();
+    const monthKey = currentMonthKeyRef.current;
 
     try {
       setLeaderboardStatus("loading");
@@ -672,10 +708,7 @@ export default function App() {
     deadRef.current = true;
     pausedRef.current = false;
     const finalScore = Math.floor(best.current);
-    const nextHigh = Math.max(highScoreRef.current, finalScore);
-    highScoreRef.current = nextHigh;
-    safeSet(STORAGE_KEY, nextHigh);
-    setHighScore(nextHigh);
+    const nextHigh = saveMonthlyHighScore(finalScore);
     void refreshLeaderboard(nextHigh);
     setPaused(false);
     setDead(true);
@@ -707,6 +740,7 @@ export default function App() {
   };
 
   const openLeaderboard = () => {
+    syncMonthlyHighScore();
     setLeaderboard(makeLeaderboard([], highScoreRef.current, playerName, playerIdRef.current));
     void refreshLeaderboard(highScoreRef.current);
     setScreen("leaderboard");
@@ -714,8 +748,19 @@ export default function App() {
 
   useEffect(() => {
     runSelfTests();
+    syncMonthlyHighScore();
     void refreshLeaderboard();
   }, []);
+
+  useEffect(() => {
+    if (typeof window === "undefined") return undefined;
+    const interval = window.setInterval(() => {
+      const previousMonthKey = currentMonthKeyRef.current;
+      syncMonthlyHighScore();
+      if (currentMonthKeyRef.current !== previousMonthKey) void refreshLeaderboard(null, playerName);
+    }, 30 * 1000);
+    return () => window.clearInterval(interval);
+  }, [playerName]);
 
   useEffect(() => {
     if (typeof document === "undefined") return undefined;
@@ -1403,11 +1448,7 @@ export default function App() {
         nextToast.current += 500;
       }
       setScore(currentScore);
-      if (currentScore > highScoreRef.current) {
-        highScoreRef.current = currentScore;
-        safeSet(STORAGE_KEY, currentScore);
-        setHighScore(currentScore);
-      }
+      if (currentScore > syncMonthlyHighScore()) saveMonthlyHighScore(currentScore);
 
       if (!bossArena.current) {
         let top = Math.min(...platforms.current.map((platform) => platform.y));
